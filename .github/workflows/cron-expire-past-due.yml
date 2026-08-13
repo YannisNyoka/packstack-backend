@@ -1,0 +1,31 @@
+name: Expire past-due subscriptions
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run billing:expire-past-due
+        env:
+          NODE_ENV: production
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          BASE_DOMAIN: packstack.co.za
+          API_BASE_URL: https://packstack-backend.onrender.com
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+          JWT_SUPERADMIN_SECRET: ${{ secrets.JWT_SUPERADMIN_SECRET }}
+          APPOINTMENT_LINK_SECRET: ${{ secrets.APPOINTMENT_LINK_SECRET }}
+          SECRETS_MASTER_KEY: ${{ secrets.SECRETS_MASTER_KEY }}
+          PAYFAST_MODE: sandbox
+          PAYFAST_MERCHANT_ID: ${{ secrets.PAYFAST_MERCHANT_ID }}
+          PAYFAST_MERCHANT_KEY: ${{ secrets.PAYFAST_MERCHANT_KEY }}
+          PAYFAST_PASSPHRASE: ${{ secrets.PAYFAST_PASSPHRASE }}
