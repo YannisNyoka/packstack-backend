@@ -107,7 +107,7 @@ export async function createCheckoutForPlan({ req, actorUserId, tenantId, tenant
  * other trial tenant, and expireTrials() below suspends them at trialEndsAt
  * same as usual.
  */
-export async function cancelSubscription({ req, actorUserId, tenantId }) {
+export async function cancelSubscription({ req, actorUserId }) {
   const subscription = await Subscription.findOne({});
   if (!subscription) throw ApiError.notFound('No subscription found for this tenant');
   if (subscription.status === 'canceled') throw ApiError.badRequest('This subscription is already cancelled');

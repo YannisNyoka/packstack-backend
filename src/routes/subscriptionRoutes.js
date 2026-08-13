@@ -51,7 +51,6 @@ router.post('/cancel', async (req, res, next) => {
     const subscription = await billingService.cancelSubscription({
       req,
       actorUserId: req.auth.userId,
-      tenantId: req.tenant._id,
     });
     res.json(subscription);
   } catch (err) {
