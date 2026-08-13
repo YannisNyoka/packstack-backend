@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import * as domainService from '../services/domainService.js';
+import { vercelDnsInstructionsFor } from '../lib/providers/vercelClient.js';
 
 const router = Router({ mergeParams: true });
 
@@ -49,7 +50,12 @@ router.post('/:domain/verify', async (req, res, next) => {
       tenantId: req.tenant._id,
       domain: req.params.domain,
     });
-    res.json(mapping);
+    res.json({
+      ...mapping.toObject(),
+      // Only relevant once ownership is proven and Vercel registration has
+      // been attempted - null once sslStatus is 'issued', nothing left to do.
+      vercelDnsInstructions: mapping.verified && mapping.sslStatus !== 'issued' ? vercelDnsInstructionsFor(mapping.domain) : null,
+    });
   } catch (err) {
     next(err);
   }

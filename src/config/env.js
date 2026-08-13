@@ -51,6 +51,17 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),
+
+  // Lets services/domainService.js register a tenant's verified custom
+  // domain with the packstack-frontend Vercel project (see
+  // lib/providers/vercelClient.js) - without this, a domain can pass our own
+  // DNS-TXT ownership check but never actually get routed/certificated by
+  // Vercel. Optional, same reasoning as PayFast/Cloudinary: the domain
+  // ownership flow still works without it, just the Vercel-registration step
+  // is skipped (logged, not fatal) until these are set.
+  VERCEL_API_TOKEN: z.string().optional(),
+  VERCEL_TEAM_ID: z.string().optional(),
+  VERCEL_PROJECT_ID: z.string().default('packstack-frontend'),
 });
 
 function loadEnv() {

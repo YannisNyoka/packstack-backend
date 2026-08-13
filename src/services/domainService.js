@@ -4,6 +4,7 @@ import { ApiError } from '../lib/ApiError.js';
 import { logAudit } from '../lib/auditLog.js';
 import { getCachedTenant, setCachedTenant, clearTenantCache } from '../lib/tenantCache.js';
 import { generateVerificationToken, verificationHostFor, domainOwnershipVerified } from '../lib/dnsVerification.js';
+import { addDomainToVercelProject, removeDomainFromVercelProject } from '../lib/providers/vercelClient.js';
 
 /**
  * Resolves a verified custom domain to its tenant - the domain-based
@@ -74,33 +75,49 @@ export async function addDomain({ req, actorUserId, tenantId, domain }) {
 export async function verifyDomain({ req, actorUserId, tenantId, domain, resolveTxt }) {
   const mapping = await DomainMapping.findOne({ tenantId, domain }).select('+verificationToken');
   if (!mapping) throw ApiError.notFound('Domain not found');
-  if (mapping.verified) return mapping;
 
-  const verified = await domainOwnershipVerified({
-    domain: mapping.domain,
-    expectedToken: mapping.verificationToken,
-    ...(resolveTxt ? { resolveTxt } : {}),
-  });
+  if (!mapping.verified) {
+    const verified = await domainOwnershipVerified({
+      domain: mapping.domain,
+      expectedToken: mapping.verificationToken,
+      ...(resolveTxt ? { resolveTxt } : {}),
+    });
 
-  if (!verified) {
-    throw ApiError.badRequest(
-      `Could not find the required TXT record at ${verificationHostFor(mapping.domain)}. DNS changes can take a while to propagate - try again shortly.`,
-      { code: 'DOMAIN_NOT_VERIFIED' }
-    );
+    if (!verified) {
+      throw ApiError.badRequest(
+        `Could not find the required TXT record at ${verificationHostFor(mapping.domain)}. DNS changes can take a while to propagate - try again shortly.`,
+        { code: 'DOMAIN_NOT_VERIFIED' }
+      );
+    }
+
+    mapping.verified = true;
+    clearTenantCache(); // custom-domain resolution and CORS both cache on verified state
+
+    await logAudit({
+      req,
+      actorUserId,
+      action: 'domain.verify',
+      entityType: 'DomainMapping',
+      entityId: mapping._id,
+      diff: { after: { verified: true } },
+    });
   }
 
-  mapping.verified = true;
+  // Ownership is proven (just now, or on a prior call) - register the domain
+  // with Vercel, or re-check its status if already registered, so sslStatus
+  // reflects whether the tenant has ALSO pointed their DNS at Vercel (a
+  // separate step from the TXT ownership check above - see vercelClient.js).
+  // Runs every time, even for an already-verified domain, so re-clicking
+  // "Verify" is how the owner refreshes SSL status after updating their DNS.
+  // Best-effort: a Vercel hiccup shouldn't undo the ownership proof above.
+  try {
+    const vercelResult = await addDomainToVercelProject(mapping.domain);
+    if (vercelResult) mapping.sslStatus = vercelResult.verified ? 'issued' : 'pending';
+  } catch (err) {
+    console.error(`[domainService] Vercel registration failed for ${mapping.domain}: ${err.message}`);
+    mapping.sslStatus = 'failed';
+  }
   await mapping.save();
-  clearTenantCache(); // custom-domain resolution and CORS both cache on verified state
-
-  await logAudit({
-    req,
-    actorUserId,
-    action: 'domain.verify',
-    entityType: 'DomainMapping',
-    entityId: mapping._id,
-    diff: { after: { verified: true } },
-  });
 
   return mapping;
 }
@@ -108,6 +125,14 @@ export async function verifyDomain({ req, actorUserId, tenantId, domain, resolve
 export async function removeDomain({ req, actorUserId, tenantId, domain }) {
   const mapping = await DomainMapping.findOneAndDelete({ tenantId, domain });
   if (!mapping) throw ApiError.notFound('Domain not found');
+
+  // Best-effort - a Vercel-side failure shouldn't block removing the mapping
+  // the tenant actually asked to remove.
+  try {
+    await removeDomainFromVercelProject(mapping.domain);
+  } catch (err) {
+    console.error(`[domainService] Vercel domain removal failed for ${mapping.domain}: ${err.message}`);
+  }
 
   clearTenantCache();
 
