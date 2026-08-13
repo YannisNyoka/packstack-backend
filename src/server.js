@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { createApp } from './app.js';
 import { connectDB } from './config/db.js';
 import { env } from './config/env.js';
@@ -12,5 +13,6 @@ async function main() {
 
 main().catch((err) => {
   console.error('Failed to start server:', err);
+  Sentry.captureException(err);
   process.exit(1);
 });

@@ -8,8 +8,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "dev": "nodemon --node-args=\"--import ./src/instrument.js\" src/server.js",
+    "start": "node --import ./src/instrument.js src/server.js",
     "test": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:watch": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --watch",
     "lint": "eslint .",
@@ -19,6 +19,7 @@
     "trials:expire": "node src/jobs/expireTrials.js"
   },
   "dependencies": {
+    "@sentry/node": "^10.70.0",
     "argon2": "^0.41.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
