@@ -52,6 +52,12 @@ router.post('/:domain/verify', async (req, res, next) => {
     });
     res.json({
       ...mapping.toObject(),
+      // TEMP DEBUG - remove after diagnosing the live Vercel-registration issue.
+      _debug: {
+        hasToken: Boolean(process.env.VERCEL_API_TOKEN),
+        hasTeamId: Boolean(process.env.VERCEL_TEAM_ID),
+        tokenLen: (process.env.VERCEL_API_TOKEN || '').length,
+      },
       // Only relevant once ownership is proven and Vercel registration has
       // been attempted - null once sslStatus is 'issued', nothing left to do.
       vercelDnsInstructions: mapping.verified && mapping.sslStatus !== 'issued' ? vercelDnsInstructionsFor(mapping.domain) : null,
