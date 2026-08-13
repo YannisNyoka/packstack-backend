@@ -157,16 +157,20 @@ export async function handlePayfastItn({ orderedFields, rawBody }) {
   }
 
   if (env.NODE_ENV === 'production') {
-    let valid = true;
+    // Secondary, defense-in-depth check on top of the signature verification
+    // above (which is the actual cryptographic guarantee - see
+    // payfastClient.js). Log-only, never blocking: confirmed against real
+    // PayFast sandbox traffic that this round-trip can come back non-VALID
+    // for a genuinely valid, correctly-signed ITN (observed as an immediate
+    // 403 in production that then replayed as VALID moments later manually)
+    // - a timing/replay quirk on PayFast's side, not evidence of forgery.
+    // Hard-failing on it was rejecting real transactions.
     try {
-      valid = await validateWithPayfast(rawBody);
+      const valid = await validateWithPayfast(rawBody);
+      if (!valid) console.error('[billingService] PayFast server-side ITN validation returned non-VALID for a signature-verified ITN - proceeding anyway.');
     } catch (err) {
-      // A transient network failure reaching PayFast's own validate endpoint
-      // isn't the same as PayFast telling us the ITN is invalid - the
-      // signature already checked out above, so don't hard-fail on this.
       console.error(`[billingService] PayFast server-side ITN validation unreachable: ${err.message}`);
     }
-    if (!valid) throw ApiError.forbidden('PayFast could not validate this ITN');
   }
 
   const tenantId = fieldsObj.custom_str1;
