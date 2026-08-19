@@ -17,7 +17,10 @@ function setRefreshCookie(res, token) {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     httpOnly: true,
     secure: env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    // See the matching comment in authRoutes.js - the frontend and this API
+    // are different sites, so SameSite=Strict never sends this cookie at
+    // all, silently breaking refresh entirely.
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
     path: REFRESH_COOKIE_PATH,
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });

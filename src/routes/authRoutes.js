@@ -20,7 +20,14 @@ function setRefreshCookie(res, tenantSlug, token) {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     httpOnly: true,
     secure: env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    // The frontend (Vercel) and this API (Render) are different sites, so
+    // this cookie is sent on every cross-site fetch() the dashboard makes -
+    // SameSite=Strict silently never sends it at all in that setup, which
+    // breaks silent refresh entirely (every session dies the moment the
+    // short-lived access token expires). 'none' requires secure:true to be
+    // accepted by browsers at all, which is already true in production;
+    // local dev keeps 'lax' since plain http:// can't satisfy 'none' anyway.
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
     path: refreshCookiePath(tenantSlug),
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });
