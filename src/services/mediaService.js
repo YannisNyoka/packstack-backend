@@ -2,6 +2,7 @@ import { env } from '../config/env.js';
 import * as cloudinaryClient from '../lib/providers/cloudinaryClient.js';
 import * as themeService from './themeService.js';
 import { ApiError } from '../lib/ApiError.js';
+import { runWithTenant } from '../lib/tenantContext.js';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIMETYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -43,5 +44,13 @@ export async function uploadThemeImage({ req, actorUserId, tenantId, kind, file 
   }
 
   const field = kind === 'logo' ? 'logoUrl' : 'bannerUrl';
-  return themeService.updateTheme({ req, actorUserId, data: { [field]: result.secure_url } });
+  // multer's multipart parsing consumes the raw request stream through its
+  // own event-driven parser (busboy), whose async resource chain predates
+  // tenantResolution.js's runWithTenant() call - AsyncLocalStorage context
+  // doesn't reliably survive that boundary, so re-bind it explicitly here
+  // rather than relying on ambient context that may already be lost by the
+  // time multer hands control back.
+  return runWithTenant(tenantId, () =>
+    themeService.updateTheme({ req, actorUserId, data: { [field]: result.secure_url } })
+  );
 }
