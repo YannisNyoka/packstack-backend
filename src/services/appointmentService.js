@@ -190,7 +190,7 @@ export async function getAvailability({ tenantId, date, serviceIds, staffMemberI
   return { date, durationMinutes, staff };
 }
 
-export async function listAppointments({ from, to, staffMemberId, status } = {}) {
+export async function listAppointments({ from, to, staffMemberId, status, customerId } = {}) {
   const filter = {};
   if (from || to) {
     filter.startTime = {};
@@ -199,6 +199,7 @@ export async function listAppointments({ from, to, staffMemberId, status } = {})
   }
   if (staffMemberId) filter.staffMemberId = staffMemberId;
   if (status) filter.status = status;
+  if (customerId) filter.customerId = customerId;
 
   return Appointment.find(filter).sort({ startTime: 1 }).populate('customerId staffMemberId serviceIds');
 }
@@ -346,7 +347,16 @@ export async function releasePendingPaymentAppointment(appointmentId) {
   );
 }
 
-export async function rescheduleAppointment({ req, tenantId, actorUserId = null, id, newStartTime, enforceBookingRules }) {
+export async function rescheduleAppointment({
+  req,
+  tenantId,
+  actorUserId = null,
+  actorType = 'user',
+  actorCustomerId = null,
+  id,
+  newStartTime,
+  enforceBookingRules,
+}) {
   const appointment = await Appointment.findById(id);
   if (!appointment) throw ApiError.notFound('Appointment not found');
   if (FINAL_STATUSES.includes(appointment.status)) {
@@ -391,6 +401,8 @@ export async function rescheduleAppointment({ req, tenantId, actorUserId = null,
   await logAudit({
     req,
     actorUserId,
+    actorType,
+    actorCustomerId,
     action: 'appointment.reschedule',
     entityType: 'Appointment',
     entityId: appointment._id,
@@ -407,7 +419,16 @@ export async function rescheduleAppointment({ req, tenantId, actorUserId = null,
  * behalf at any time - the cancellation window exists to stop a customer
  * self-cancelling too close to their appointment, not to stop the business).
  */
-export async function cancelAppointment({ req, tenantId, actorUserId = null, id, reason, enforceBookingRules = false }) {
+export async function cancelAppointment({
+  req,
+  tenantId,
+  actorUserId = null,
+  actorType = 'user',
+  actorCustomerId = null,
+  id,
+  reason,
+  enforceBookingRules = false,
+}) {
   const appointment = await Appointment.findById(id);
   if (!appointment) throw ApiError.notFound('Appointment not found');
   if (FINAL_STATUSES.includes(appointment.status)) {
@@ -437,6 +458,8 @@ export async function cancelAppointment({ req, tenantId, actorUserId = null, id,
   await logAudit({
     req,
     actorUserId,
+    actorType,
+    actorCustomerId,
     action: 'appointment.cancel',
     entityType: 'Appointment',
     entityId: id,

@@ -11,6 +11,8 @@ import integrationRoutes from './integrationRoutes.js';
 import subscriptionRoutes from './subscriptionRoutes.js';
 import domainRoutes from './domainRoutes.js';
 import tenantSettingsRoutes from './tenantSettingsRoutes.js';
+import customerAccountAuthRoutes from './customerAccountAuthRoutes.js';
+import customerAccountRoutes from './customerAccountRoutes.js';
 
 const router = Router({ mergeParams: true });
 
@@ -25,6 +27,13 @@ router.use('/public', publicRoutes);
 router.use('/services', serviceRoutes);
 router.use('/staff', staffRoutes);
 router.use('/customers', customerRoutes);
+// Must be mounted before '/account' below (and never nested under
+// '/customers', which applies requireAuth() - staff-only - to its entire
+// subtree) - Express matches these by registration order, and
+// customerAccountRoutes applies requireCustomerAuth() to its whole router,
+// which would otherwise swallow signup/login requests too.
+router.use('/account/auth', customerAccountAuthRoutes);
+router.use('/account', customerAccountRoutes);
 router.use('/appointments', appointmentRoutes);
 router.use('/integrations', integrationRoutes);
 router.use('/billing', subscriptionRoutes);

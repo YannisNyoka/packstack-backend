@@ -20,7 +20,13 @@ export function enforceTenantStatus() {
 
     if (req.path.startsWith('/auth') || req.path.startsWith('/billing')) return next();
 
-    if (req.path.startsWith('/public')) {
+    // '/account' (customer login/signup/self-service) gets the same
+    // fully-blocked treatment as '/public' rather than the dashboard's
+    // GET-only carve-out below: a suspended tenant already can't take new
+    // anonymous bookings, so there's no reason a customer should be able to
+    // log in or reschedule/cancel against a business that's currently
+    // non-operational.
+    if (req.path.startsWith('/public') || req.path.startsWith('/account')) {
       return next(new ApiError(403, 'This business is temporarily unavailable.', { code: 'TENANT_SUSPENDED' }));
     }
 

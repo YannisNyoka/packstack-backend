@@ -10,6 +10,7 @@ const envSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 chars'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 chars'),
   JWT_SUPERADMIN_SECRET: z.string().min(32, 'JWT_SUPERADMIN_SECRET must be at least 32 chars'),
+  JWT_CUSTOMER_SECRET: z.string().min(32, 'JWT_CUSTOMER_SECRET must be at least 32 chars'),
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL: z.string().default('30d'),
 
@@ -71,6 +72,7 @@ function loadEnv() {
     process.env.JWT_ACCESS_SECRET ||= 'test-access-secret-test-access-secret-32';
     process.env.JWT_REFRESH_SECRET ||= 'test-refresh-secret-test-refresh-secret';
     process.env.JWT_SUPERADMIN_SECRET ||= 'test-superadmin-secret-test-superadmin';
+    process.env.JWT_CUSTOMER_SECRET ||= 'test-customer-secret-test-customer-secret-32';
     process.env.APPOINTMENT_LINK_SECRET ||= 'test-appointment-link-secret-test-32b';
     // PayFast's own published sandbox test credentials - fine to hardcode,
     // they're meant for exactly this.

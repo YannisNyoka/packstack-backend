@@ -1,6 +1,7 @@
 import { Customer } from '../models/Customer.js';
 import { ApiError } from '../lib/ApiError.js';
 import { logAudit } from '../lib/auditLog.js';
+import { normalizePhone } from '../lib/phone.js';
 
 export async function listCustomers({ search } = {}) {
   const filter = search
@@ -39,9 +40,10 @@ export async function updateCustomer({ req, actorUserId, id, data }) {
  * creates one, without requiring a logged-in staff user (no actorUserId).
  */
 export async function findOrCreateByPhone({ phone, name, email }) {
-  let customer = await Customer.findOne({ phone });
+  const normalizedPhone = normalizePhone(phone);
+  let customer = await Customer.findOne({ phone: normalizedPhone });
   if (!customer) {
-    customer = await Customer.create({ phone, name, email: email || null });
+    customer = await Customer.create({ phone: normalizedPhone, name, email: email || null });
   }
   return customer;
 }

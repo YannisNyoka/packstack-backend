@@ -1,6 +1,7 @@
 import { User } from '../models/User.js';
 import { SuperAdminUser } from '../models/SuperAdminUser.js';
-import { verifyTenantAccessToken, verifySuperAdminAccessToken } from '../lib/jwt.js';
+import { Customer } from '../models/Customer.js';
+import { verifyTenantAccessToken, verifySuperAdminAccessToken, verifyCustomerAccessToken } from '../lib/jwt.js';
 import { ApiError } from '../lib/ApiError.js';
 
 function extractBearerToken(req) {
@@ -97,6 +98,46 @@ export function requireSuperAdmin() {
       }
 
       req.superAdmin = { userId: String(admin._id) };
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+/**
+ * Same shape as requireAuth() above, for the logged-in customer account
+ * surface (see routes/customerAccountRoutes.js). passwordHash being null
+ * means this Customer doc exists only from the anonymous booking flow and
+ * has never actually signed up - treated the same as "account not found"
+ * here, since verifyCustomerAccessToken alone can't tell the two apart.
+ */
+export function requireCustomerAuth() {
+  return async function requireCustomerAuthMiddleware(req, res, next) {
+    try {
+      const token = extractBearerToken(req);
+      if (!token) throw ApiError.unauthorized('Missing bearer token');
+
+      let payload;
+      try {
+        payload = verifyCustomerAccessToken(token);
+      } catch {
+        throw ApiError.unauthorized('Invalid or expired token');
+      }
+
+      if (!req.tenant || String(payload.tenantId) !== String(req.tenant._id)) {
+        throw ApiError.forbidden('Token does not belong to this tenant', { code: 'TENANT_MISMATCH' });
+      }
+
+      const customer = await Customer.findById(payload.sub).select('+passwordHash');
+      if (!customer || !customer.passwordHash) {
+        throw ApiError.unauthorized('Account not found');
+      }
+      if (customer.tokenVersion !== payload.tokenVersion) {
+        throw ApiError.unauthorized('Token has been revoked');
+      }
+
+      req.customerAuth = { customerId: String(customer._id), tenantId: String(req.tenant._id) };
       next();
     } catch (err) {
       next(err);

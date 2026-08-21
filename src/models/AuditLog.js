@@ -6,7 +6,8 @@ const { Schema } = mongoose;
 const auditLogSchema = new Schema(
   {
     actorUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    actorType: { type: String, enum: ['user', 'superadmin'], default: 'user' },
+    actorCustomerId: { type: Schema.Types.ObjectId, ref: 'Customer', default: null },
+    actorType: { type: String, enum: ['user', 'superadmin', 'customer'], default: 'user' },
     action: { type: String, required: true }, // e.g. 'appointment.cancel', 'payment.status_change', 'auth.login_failed'
     entityType: { type: String, required: true },
     entityId: { type: Schema.Types.ObjectId, default: null },

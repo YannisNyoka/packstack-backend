@@ -58,6 +58,37 @@ export function verifySuperAdminRefreshToken(token) {
   return jwt.verify(token, env.JWT_SUPERADMIN_SECRET, { audience: 'packstack-superadmin-refresh' });
 }
 
+// Logged-in customer account tokens (signup/login - see
+// customerAuthService.js), distinct from the signed manage-link tokens below:
+// this pair identifies a persistent account, not one specific appointment.
+// Own secret, same reasoning as every other token family here - a leaked
+// customer-token secret must never double as staff/superadmin/manage-link
+// access.
+export function signCustomerAccessToken({ customerId, tenantId, tokenVersion }) {
+  return jwt.sign({ sub: String(customerId), tenantId: String(tenantId), tokenVersion }, env.JWT_CUSTOMER_SECRET, {
+    expiresIn: env.JWT_ACCESS_TTL,
+    audience: 'packstack-customer',
+  });
+}
+
+export function verifyCustomerAccessToken(token) {
+  return jwt.verify(token, env.JWT_CUSTOMER_SECRET, { audience: 'packstack-customer' });
+}
+
+// Refresh reuses JWT_CUSTOMER_SECRET (like superadmin access/refresh above)
+// rather than a second secret - the `audience` claim alone already keeps an
+// access token from being presented as a refresh token or vice versa.
+export function signCustomerRefreshToken({ customerId, tenantId, tokenVersion }) {
+  return jwt.sign({ sub: String(customerId), tenantId: String(tenantId), tokenVersion }, env.JWT_CUSTOMER_SECRET, {
+    expiresIn: env.JWT_REFRESH_TTL,
+    audience: 'packstack-customer-refresh',
+  });
+}
+
+export function verifyCustomerRefreshToken(token) {
+  return jwt.verify(token, env.JWT_CUSTOMER_SECRET, { audience: 'packstack-customer-refresh' });
+}
+
 // Signs the customer-facing "manage your booking" link (view/reschedule/
 // cancel with no login - see architecture doc §4). Its own secret, distinct
 // from every other token kind here: this one is handed to a customer over

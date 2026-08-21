@@ -8,9 +8,19 @@ import { AuditLog } from '../models/AuditLog.js';
  * Runs inside the current tenant context, so the entry is automatically
  * scoped to the right tenant via tenantScopePlugin.
  */
-export async function logAudit({ req, actorUserId = null, actorType = 'user', action, entityType, entityId = null, diff = null }) {
+export async function logAudit({
+  req,
+  actorUserId = null,
+  actorCustomerId = null,
+  actorType = 'user',
+  action,
+  entityType,
+  entityId = null,
+  diff = null,
+}) {
   await AuditLog.create({
     actorUserId,
+    actorCustomerId,
     actorType,
     action,
     entityType,
