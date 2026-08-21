@@ -63,6 +63,10 @@ const themeUpdateSchema = z
     tagline: z.string().trim().max(300),
     logoUrl: urlOrEmpty,
     bannerUrl: urlOrEmpty,
+    heroVideoUrl: urlOrEmpty,
+    heroMediaType: z.enum(['image', 'video']),
+    heroEnabled: z.boolean(),
+    heroBadgeText: z.string().trim().max(100),
     colors: z
       .object({
         primary: hexColor,
@@ -82,6 +86,8 @@ const themeUpdateSchema = z
         instagram: urlOrEmpty,
         facebook: urlOrEmpty,
         whatsapp: z.string().trim().max(50),
+        tiktok: urlOrEmpty,
+        website: urlOrEmpty,
       })
       .partial(),
   })
@@ -158,6 +164,43 @@ router.post('/theme/banner', requireRole('owner'), uploadSingleImage, async (req
       actorUserId: req.auth.userId,
       tenantId: req.tenant._id,
       kind: 'banner',
+      file: req.file,
+    });
+    res.json(theme);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Separate multer instance from uploadSingleImage above - a hero video needs
+// a much larger size cap and a different mimetype allow-list than a
+// logo/banner image.
+const uploadVideoMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+    if (!allowed.has(file.mimetype)) {
+      return cb(new Error('Only MP4, WebM or MOV videos are allowed'));
+    }
+    cb(null, true);
+  },
+});
+
+function uploadSingleVideo(req, res, next) {
+  uploadVideoMiddleware.single('video')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return next(ApiError.badRequest('Video must be smaller than 50MB'));
+    next(ApiError.badRequest(err.message || 'Invalid video upload'));
+  });
+}
+
+router.post('/theme/hero-video', requireRole('owner'), uploadSingleVideo, async (req, res, next) => {
+  try {
+    const theme = await mediaService.uploadThemeVideo({
+      req,
+      actorUserId: req.auth.userId,
+      tenantId: req.tenant._id,
       file: req.file,
     });
     res.json(theme);

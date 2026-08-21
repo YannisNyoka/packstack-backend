@@ -9,6 +9,16 @@ const themeConfigSchema = new Schema(
     tagline: { type: String, default: '', maxlength: 300 },
     logoUrl: { type: String, default: null },
     bannerUrl: { type: String, default: null },
+    // The public landing page's hero section (see packstack-frontend's
+    // LandingPage.jsx) - bannerUrl above is the image variant, heroVideoUrl
+    // the video variant, heroMediaType picks which one actually renders.
+    // heroEnabled lets a tenant skip the hero entirely for a plain header
+    // instead ("the option to have a banner or not").
+    heroMediaType: { type: String, enum: ['image', 'video'], default: 'image' },
+    heroVideoUrl: { type: String, default: null },
+    heroEnabled: { type: Boolean, default: true },
+    // Small pill shown over the hero, e.g. "Dube, Soweto - Est. 2019".
+    heroBadgeText: { type: String, default: '', maxlength: 100 },
     colors: {
       primary: { type: String, default: '#111827' },
       secondary: { type: String, default: '#6B7280' },
@@ -23,6 +33,8 @@ const themeConfigSchema = new Schema(
       instagram: { type: String, default: '' },
       facebook: { type: String, default: '' },
       whatsapp: { type: String, default: '' },
+      tiktok: { type: String, default: '' },
+      website: { type: String, default: '' },
     },
   },
   { timestamps: true }

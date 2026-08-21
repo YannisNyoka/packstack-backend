@@ -26,6 +26,18 @@ function sign(params, apiSecret) {
  * accumulating a new one under a fresh id every time.
  */
 export async function uploadImage({ cloudName, apiKey, apiSecret, buffer, mimetype, publicId }) {
+  return uploadAsset({ cloudName, apiKey, apiSecret, buffer, mimetype, publicId, resourceType: 'image' });
+}
+
+// Hero background videos - same signed-upload flow as uploadImage, just
+// posted to Cloudinary's video endpoint instead. resourceType is
+// deliberately excluded from the signature (see sign()'s comment above) -
+// Cloudinary doesn't include it in what gets hashed.
+export async function uploadVideo({ cloudName, apiKey, apiSecret, buffer, mimetype, publicId }) {
+  return uploadAsset({ cloudName, apiKey, apiSecret, buffer, mimetype, publicId, resourceType: 'video' });
+}
+
+async function uploadAsset({ cloudName, apiKey, apiSecret, buffer, mimetype, publicId, resourceType }) {
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = sign({ overwrite: true, public_id: publicId, timestamp }, apiSecret);
 
@@ -38,10 +50,15 @@ export async function uploadImage({ cloudName, apiKey, apiSecret, buffer, mimety
     overwrite: 'true',
   });
 
-  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+  // Video uploads take meaningfully longer than an image of the same size
+  // (Cloudinary transcodes/derives on ingest) - give video 3x the timeout
+  // rather than sharing the constant image uploads tune for.
+  const timeoutMs = resourceType === 'video' ? REQUEST_TIMEOUT_MS * 3 : REQUEST_TIMEOUT_MS;
+
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`, {
     method: 'POST',
     body,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const result = await res.json().catch(() => ({}));
