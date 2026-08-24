@@ -66,7 +66,7 @@ describe('landing page hero settings', () => {
     expect(res.body.socialLinks.website).toBe('https://herosalon.example.com');
   });
 
-  it('uploads a hero video and writes heroVideoUrl without touching bannerUrl', async () => {
+  it('uploads a hero video and appends it to heroVideoUrls without touching bannerUrl', async () => {
     mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video.mp4');
 
     const res = await request(app)
@@ -75,11 +75,77 @@ describe('landing page hero settings', () => {
       .attach('video', MP4_BYTES, { filename: 'hero.mp4', contentType: 'video/mp4' });
 
     expect(res.status).toBe(200);
-    expect(res.body.heroVideoUrl).toBe('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video.mp4');
+    expect(res.body.heroVideoUrls).toEqual(['https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video.mp4']);
     expect(res.body.bannerUrl).toBeNull();
 
     const [url] = fetchSpy.mock.calls[0];
     expect(url).toContain('/video/upload');
+  });
+
+  it('appends successive uploads instead of replacing earlier ones', async () => {
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video-1.mp4');
+    const res1 = await request(app)
+      .post(`/api/t/${slug}/settings/theme/hero-video`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('video', MP4_BYTES, { filename: 'hero1.mp4', contentType: 'video/mp4' });
+    expect(res1.body.heroVideoUrls).toEqual(['https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video-1.mp4']);
+
+    fetchSpy.mockRestore();
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video-2.mp4');
+    const res2 = await request(app)
+      .post(`/api/t/${slug}/settings/theme/hero-video`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('video', MP4_BYTES, { filename: 'hero2.mp4', contentType: 'video/mp4' });
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.heroVideoUrls).toEqual([
+      'https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video-1.mp4',
+      'https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/hero-video-2.mp4',
+    ]);
+  });
+
+  it('rejects uploading a 7th hero video', async () => {
+    const { ThemeConfig } = await import('../../src/models/ThemeConfig.js');
+    const { runWithTenant } = await import('../../src/lib/tenantContext.js');
+    const { Tenant } = await import('../../src/models/Tenant.js');
+    const tenant = await Tenant.findOne({ slug });
+    await runWithTenant(tenant._id, async () => {
+      await ThemeConfig.findOneAndUpdate(
+        {},
+        { heroVideoUrls: Array.from({ length: 6 }, (_, i) => `https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/existing-${i}.mp4`) }
+      );
+    });
+
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/seventh.mp4');
+    const res = await request(app)
+      .post(`/api/t/${slug}/settings/theme/hero-video`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('video', MP4_BYTES, { filename: 'seventh.mp4', contentType: 'video/mp4' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/at most 6/);
+  });
+
+  it('lets the owner remove a hero video via PATCH /settings/theme (full-array replace)', async () => {
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/keep-me.mp4');
+    await request(app)
+      .post(`/api/t/${slug}/settings/theme/hero-video`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('video', MP4_BYTES, { filename: 'keep.mp4', contentType: 'video/mp4' });
+    fetchSpy.mockRestore();
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/remove-me.mp4');
+    await request(app)
+      .post(`/api/t/${slug}/settings/theme/hero-video`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('video', MP4_BYTES, { filename: 'remove.mp4', contentType: 'video/mp4' });
+
+    const res = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ heroVideoUrls: ['https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/keep-me.mp4'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.heroVideoUrls).toEqual(['https://res.cloudinary.com/test-cloud/video/upload/v1/packstack/test/keep-me.mp4']);
   });
 
   it('rejects a non-video file for the hero video upload', async () => {

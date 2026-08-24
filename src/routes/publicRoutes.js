@@ -79,7 +79,24 @@ const publicBookingSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
-router.post('/appointments', rateLimitBookingByTenant, validate(publicBookingSchema), async (req, res, next) => {
+// Rejects the anonymous booking flow outright when the tenant has turned it
+// off (Tenant.bookingRules.requireCustomerAccount, default true) - a
+// logged-in customer books via customerAccountRoutes.js's
+// POST /account/appointments instead, which doesn't go through this router
+// at all. This is the actual enforcement point; the frontend also hides the
+// anonymous form, but that alone wouldn't stop a direct API call.
+function blockIfAccountRequired(req, res, next) {
+  if (req.tenant.bookingRules.requireCustomerAccount !== false) {
+    return next(
+      ApiError.forbidden('This business requires an account to book. Please sign up or log in.', {
+        code: 'ACCOUNT_REQUIRED',
+      })
+    );
+  }
+  next();
+}
+
+router.post('/appointments', rateLimitBookingByTenant, blockIfAccountRequired, validate(publicBookingSchema), async (req, res, next) => {
   try {
     const appointment = await appointmentService.createAppointment({
       req,
@@ -107,7 +124,7 @@ router.get('/deposit-config', async (req, res, next) => {
   }
 });
 
-router.post('/appointments/checkout', rateLimitBookingByTenant, validate(publicBookingSchema), async (req, res, next) => {
+router.post('/appointments/checkout', rateLimitBookingByTenant, blockIfAccountRequired, validate(publicBookingSchema), async (req, res, next) => {
   try {
     const result = await depositService.createDepositCheckout({
       req,

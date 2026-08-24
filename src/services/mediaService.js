@@ -11,6 +11,7 @@ const ALLOWED_MIMETYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'ima
 // even a short, low-bitrate clip easily runs several MB.
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const ALLOWED_VIDEO_MIMETYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+const MAX_HERO_VIDEOS = 6;
 
 export function isCloudinaryConfigured() {
   return Boolean(env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET);
@@ -62,9 +63,12 @@ export async function uploadThemeImage({ req, actorUserId, tenantId, kind, file 
 
 /**
  * Same shape as uploadThemeImage above, for the landing page hero's video
- * variant (see ThemeConfig.heroVideoUrl/heroMediaType). Kept as a separate
+ * carousel (see ThemeConfig.heroVideoUrls/heroMediaType). Kept as a separate
  * function rather than a branch of uploadThemeImage since the size cap,
- * allowed mimetypes, and Cloudinary resource type all differ.
+ * allowed mimetypes, and Cloudinary resource type all differ. Unlike
+ * uploadThemeImage, this appends to a list rather than replacing a single
+ * field - each upload gets its own Cloudinary publicId so earlier clips
+ * aren't overwritten.
  */
 export async function uploadThemeVideo({ req, actorUserId, tenantId, file }) {
   if (!isCloudinaryConfigured()) {
@@ -78,21 +82,30 @@ export async function uploadThemeVideo({ req, actorUserId, tenantId, file }) {
     throw ApiError.badRequest('Video must be smaller than 50MB');
   }
 
-  let result;
-  try {
-    result = await cloudinaryClient.uploadVideo({
-      cloudName: env.CLOUDINARY_CLOUD_NAME,
-      apiKey: env.CLOUDINARY_API_KEY,
-      apiSecret: env.CLOUDINARY_API_SECRET,
-      buffer: file.buffer,
-      mimetype: file.mimetype,
-      publicId: `packstack/${tenantId}/hero-video`,
-    });
-  } catch (err) {
-    throw ApiError.badRequest(`Video upload failed: ${err.message}`);
-  }
+  return runWithTenant(tenantId, async () => {
+    const theme = await themeService.getTheme();
+    if (theme.heroVideoUrls.length >= MAX_HERO_VIDEOS) {
+      throw ApiError.badRequest(`You can have at most ${MAX_HERO_VIDEOS} hero videos - remove one before adding another`);
+    }
 
-  return runWithTenant(tenantId, () =>
-    themeService.updateTheme({ req, actorUserId, data: { heroVideoUrl: result.secure_url } })
-  );
+    let result;
+    try {
+      result = await cloudinaryClient.uploadVideo({
+        cloudName: env.CLOUDINARY_CLOUD_NAME,
+        apiKey: env.CLOUDINARY_API_KEY,
+        apiSecret: env.CLOUDINARY_API_SECRET,
+        buffer: file.buffer,
+        mimetype: file.mimetype,
+        publicId: `packstack/${tenantId}/hero-video-${Date.now()}`,
+      });
+    } catch (err) {
+      throw ApiError.badRequest(`Video upload failed: ${err.message}`);
+    }
+
+    return themeService.updateTheme({
+      req,
+      actorUserId,
+      data: { heroVideoUrls: [...theme.heroVideoUrls, result.secure_url] },
+    });
+  });
 }

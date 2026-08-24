@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireCustomerAuth } from '../middleware/auth.js';
 import * as appointmentService from '../services/appointmentService.js';
+import * as depositService from '../services/depositService.js';
 import { getLoyaltyHistory } from '../services/loyaltyService.js';
 import { changeCustomerPassword, updateOwnProfile, toPublicCustomer } from '../services/customerAuthService.js';
 import { Customer } from '../models/Customer.js';
@@ -29,6 +30,48 @@ function assertOwnsAppointment(appointment, req) {
     throw ApiError.forbidden('This appointment does not belong to your account');
   }
 }
+
+const createAppointmentSchema = z.object({
+  staffMemberId: z.string(),
+  serviceIds: z.array(z.string()).min(1),
+  startTime: z.string(),
+  notes: z.string().max(1000).optional(),
+});
+
+// The authenticated counterpart to publicRoutes.js's POST /appointments -
+// identity comes from the verified customer token (customerId), never from
+// a form field, unlike the anonymous flow's customerDetails. This is the
+// only booking path once a tenant turns off anonymous booking
+// (Tenant.bookingRules.requireCustomerAccount), but it works for any
+// logged-in customer regardless of that setting.
+router.post('/appointments', validate(createAppointmentSchema), async (req, res, next) => {
+  try {
+    const appointment = await appointmentService.createAppointment({
+      req,
+      tenantId: req.tenant._id,
+      actorUserId: null,
+      enforceBookingRules: true,
+      data: { ...req.body, customerId: req.customerAuth.customerId },
+    });
+    res.status(201).json(appointment);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/appointments/checkout', validate(createAppointmentSchema), async (req, res, next) => {
+  try {
+    const result = await depositService.createDepositCheckout({
+      req,
+      tenantId: req.tenant._id,
+      tenantSlug: req.params.tenantSlug,
+      data: { ...req.body, customerId: req.customerAuth.customerId },
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/appointments', async (req, res, next) => {
   try {

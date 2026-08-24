@@ -66,20 +66,20 @@ describe('deposit checkout flow', () => {
     it('reports not required when the toggle is off', async () => {
       const res = await request(app).get(`/api/t/${slug}/public/deposit-config`);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ required: false, amountZAR: 0 });
+      expect(res.body).toEqual({ required: false, amountZAR: 0, requireCustomerAccount: false });
     });
 
     it('reports not required when the toggle is on but Yoco is not connected', async () => {
       await requireDeposit(accessToken);
       const res = await request(app).get(`/api/t/${slug}/public/deposit-config`);
-      expect(res.body).toEqual({ required: false, amountZAR: 0 });
+      expect(res.body).toEqual({ required: false, amountZAR: 0, requireCustomerAccount: false });
     });
 
     it('reports required once both the toggle is on and Yoco is connected', async () => {
       await connectYoco(accessToken);
       await requireDeposit(accessToken, 150);
       const res = await request(app).get(`/api/t/${slug}/public/deposit-config`);
-      expect(res.body).toEqual({ required: true, amountZAR: 150 });
+      expect(res.body).toEqual({ required: true, amountZAR: 150, requireCustomerAccount: false });
     });
   });
 

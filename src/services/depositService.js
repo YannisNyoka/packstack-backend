@@ -21,14 +21,16 @@ const PENDING_PAYMENT_TIMEOUT_MINUTES = 30;
 export async function getDepositConfig(tenantId) {
   const tenant = await Tenant.findById(tenantId).select('bookingRules').lean();
   if (!tenant) throw ApiError.notFound('Tenant not found');
+  const requireCustomerAccount = tenant.bookingRules.requireCustomerAccount !== false;
+
   if (!tenant.bookingRules.depositRequired || tenant.bookingRules.depositAmountZAR <= 0) {
-    return { required: false, amountZAR: 0 };
+    return { required: false, amountZAR: 0, requireCustomerAccount };
   }
 
   const credential = await getDecryptedCredential('yoco');
-  if (!credential) return { required: false, amountZAR: 0 };
+  if (!credential) return { required: false, amountZAR: 0, requireCustomerAccount };
 
-  return { required: true, amountZAR: tenant.bookingRules.depositAmountZAR };
+  return { required: true, amountZAR: tenant.bookingRules.depositAmountZAR, requireCustomerAccount };
 }
 
 /**
@@ -68,9 +70,9 @@ export async function createDepositCheckout({ req, tenantId, tenantSlug, data })
     checkout = await createCheckout({
       secretKey: credential.secretKey,
       amountZAR,
-      successUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/?depositSuccess=1`,
-      cancelUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/?depositCancelled=1`,
-      failureUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/?depositFailed=1`,
+      successUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/book?depositSuccess=1`,
+      cancelUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/book?depositCancelled=1`,
+      failureUrl: `https://${tenantSlug}.${env.BASE_DOMAIN}/book?depositFailed=1`,
       metadata: { source: 'packstack', paymentId: String(payment._id) },
     });
   } catch (err) {

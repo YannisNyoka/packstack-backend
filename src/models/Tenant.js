@@ -41,6 +41,13 @@ const tenantSchema = new Schema(
       // ahead of that, it just won't do anything until then.
       depositRequired: { type: Boolean, default: false },
       depositAmountZAR: { type: Number, default: 0, min: 0 },
+      // Whether a customer must have a PackStack account (signed up/logged
+      // in) to book at all, vs. the original anonymous-booking flow
+      // (name/phone/email typed in on the spot, no account). Defaults true -
+      // matches the account-required behavior already shipped for every
+      // tenant; a tenant can explicitly turn this off to restore anonymous
+      // booking. See publicRoutes.js and customerAccountRoutes.js.
+      requireCustomerAccount: { type: Boolean, default: true },
     },
   },
   { timestamps: true }

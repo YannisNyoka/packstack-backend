@@ -19,6 +19,7 @@ const bookingRulesUpdateSchema = z
     cancellationWindowHours: z.number().int().min(0),
     depositRequired: z.boolean(),
     depositAmountZAR: z.number().min(0),
+    requireCustomerAccount: z.boolean(),
   })
   .partial();
 
@@ -64,6 +65,7 @@ const themeUpdateSchema = z
     logoUrl: urlOrEmpty,
     bannerUrl: urlOrEmpty,
     heroVideoUrl: urlOrEmpty,
+    heroVideoUrls: z.array(urlOrEmpty).max(6),
     heroMediaType: z.enum(['image', 'video']),
     heroEnabled: z.boolean(),
     heroBadgeText: z.string().trim().max(100),
@@ -195,6 +197,9 @@ function uploadSingleVideo(req, res, next) {
   });
 }
 
+// Appends to heroVideoUrls (capped in mediaService.js) rather than replacing
+// a single field - a tenant can upload one short clip per service and have
+// them rotate in the hero, like the marketing site's own hero carousel.
 router.post('/theme/hero-video', requireRole('owner'), uploadSingleVideo, async (req, res, next) => {
   try {
     const theme = await mediaService.uploadThemeVideo({
