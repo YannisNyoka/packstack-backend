@@ -3,6 +3,7 @@ import { connectTestDB, disconnectTestDB, clearDatabase, buildTestApp } from '..
 import { createTenantWithOwner, seedTenantData } from '../helpers/factories.js';
 import { Customer } from '../../src/models/Customer.js';
 import { runWithTenant } from '../../src/lib/tenantContext.js';
+import { verifyCustomerPasswordResetToken } from '../../src/lib/jwt.js';
 
 let app;
 
@@ -28,7 +29,7 @@ describe('Customer account auth (/account/auth)', () => {
     ({ tenant: tenantB } = await createTenantWithOwner(app, { slug: slugB, displayName: 'Customer Auth Salon B' }));
   });
 
-  it('signs up a brand-new phone number', async () => {
+  it('signs up a brand-new phone number, logging in by email', async () => {
     const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234000',
       name: 'New Customer',
@@ -57,6 +58,7 @@ describe('Customer account auth (/account/auth)', () => {
     const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '+27821234567',
       name: 'Alice Client',
+      email: 'alice@example.com',
       password: 'a-strong-password',
     });
     expect(res.status).toBe(201);
@@ -68,21 +70,50 @@ describe('Customer account auth (/account/auth)', () => {
     await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234001',
       name: 'First Signup',
+      email: 'first@example.com',
       password: 'a-strong-password',
     });
     const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234001',
       name: 'Second Attempt',
+      email: 'second@example.com',
       password: 'another-password',
     });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ACCOUNT_EXISTS');
   });
 
+  it('rejects signup for an email that already has an account, even with a different phone', async () => {
+    await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821234011',
+      name: 'First Signup',
+      email: 'shared@example.com',
+      password: 'a-strong-password',
+    });
+    const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821234012',
+      name: 'Second Attempt',
+      email: 'shared@example.com',
+      password: 'another-password',
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('ACCOUNT_EXISTS');
+  });
+
+  it('rejects signup missing an email', async () => {
+    const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821234013',
+      name: 'No Email',
+      password: 'a-strong-password',
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('rejects a password shorter than 8 characters', async () => {
     const res = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234002',
       name: 'Weak Password',
+      email: 'weak@example.com',
       password: 'short',
     });
     expect(res.status).toBe(400);
@@ -92,20 +123,27 @@ describe('Customer account auth (/account/auth)', () => {
     await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234003',
       name: 'Login Test',
+      email: 'logintest@example.com',
       password: 'a-strong-password',
     });
 
-    const wrong = await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ phone: '0821234003', password: 'wrong-password' });
+    const wrong = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'logintest@example.com', password: 'wrong-password' });
     expect(wrong.status).toBe(401);
 
-    const right = await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ phone: '0821234003', password: 'a-strong-password' });
+    const right = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'logintest@example.com', password: 'a-strong-password' });
     expect(right.status).toBe(200);
     expect(right.body.accessToken).toEqual(expect.any(String));
   });
 
-  it('rejects login for a phone that has only ever booked anonymously (no account)', async () => {
-    await seedTenantData(tenantA._id); // creates +27821234567 with no passwordHash
-    const res = await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ phone: '+27821234567', password: 'anything' });
+  it('rejects login for an email that has no account', async () => {
+    await seedTenantData(tenantA._id); // creates +27821234567 with no passwordHash, no email
+    const res = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'nobody@example.com', password: 'anything' });
     expect(res.status).toBe(401);
   });
 
@@ -113,13 +151,16 @@ describe('Customer account auth (/account/auth)', () => {
     await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234004',
       name: 'Lockout Test',
+      email: 'lockout@example.com',
       password: 'a-strong-password',
     });
 
     for (let i = 0; i < 5; i += 1) {
-      await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ phone: '0821234004', password: 'wrong' });
+      await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ email: 'lockout@example.com', password: 'wrong' });
     }
-    const res = await request(app).post(`/api/t/${slugA}/account/auth/login`).send({ phone: '0821234004', password: 'a-strong-password' });
+    const res = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'lockout@example.com', password: 'a-strong-password' });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('ACCOUNT_LOCKED');
   });
@@ -128,6 +169,7 @@ describe('Customer account auth (/account/auth)', () => {
     const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234005',
       name: 'Refresh Test',
+      email: 'refresh@example.com',
       password: 'a-strong-password',
     });
     const cookie = signupRes.headers['set-cookie'].find((c) => c.startsWith('ps_customer_refresh='));
@@ -142,17 +184,19 @@ describe('Customer account auth (/account/auth)', () => {
     const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234006',
       name: 'Me Test',
+      email: 'metest@example.com',
       password: 'a-strong-password',
     });
     const res = await request(app).get(`/api/t/${slugA}/account/auth/me`).set('Authorization', `Bearer ${signupRes.body.accessToken}`);
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ name: 'Me Test', phone: '+27821234006' });
+    expect(res.body).toMatchObject({ name: 'Me Test', phone: '+27821234006', email: 'metest@example.com' });
   });
 
   it('rejects a customer token from one tenant used against a different tenant', async () => {
     const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234007',
       name: 'Cross Tenant',
+      email: 'crosstenant@example.com',
       password: 'a-strong-password',
     });
     const res = await request(app).get(`/api/t/${slugB}/account/auth/me`).set('Authorization', `Bearer ${signupRes.body.accessToken}`);
@@ -164,6 +208,7 @@ describe('Customer account auth (/account/auth)', () => {
     const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '0821234008',
       name: 'Logout All',
+      email: 'logoutall@example.com',
       password: 'a-strong-password',
     });
     const token = signupRes.body.accessToken;
@@ -172,6 +217,160 @@ describe('Customer account auth (/account/auth)', () => {
 
     const res = await request(app).get(`/api/t/${slugA}/account/auth/me`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(401);
+  });
+});
+
+describe('Customer self-service profile (/account/profile)', () => {
+  let tenantA;
+
+  beforeEach(async () => {
+    await clearDatabase();
+    ({ tenant: tenantA } = await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' }));
+  });
+
+  it('rejects clearing email to empty, since it is the login identifier', async () => {
+    const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239100',
+      name: 'Profile Test',
+      email: 'profiletest@example.com',
+      password: 'a-strong-password',
+    });
+    const res = await request(app)
+      .patch(`/api/t/${slugA}/account/profile`)
+      .set('Authorization', `Bearer ${signupRes.body.accessToken}`)
+      .send({ email: '' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects changing email to one already used by another account', async () => {
+    await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239101',
+      name: 'First',
+      email: 'first-profile@example.com',
+      password: 'a-strong-password',
+    });
+    const secondSignup = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239102',
+      name: 'Second',
+      email: 'second-profile@example.com',
+      password: 'a-strong-password',
+    });
+
+    const res = await request(app)
+      .patch(`/api/t/${slugA}/account/profile`)
+      .set('Authorization', `Bearer ${secondSignup.body.accessToken}`)
+      .send({ email: 'first-profile@example.com' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('EMAIL_TAKEN');
+  });
+
+  it('allows changing to a genuinely unused email', async () => {
+    const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239103',
+      name: 'Changer',
+      email: 'old-email@example.com',
+      password: 'a-strong-password',
+    });
+    const res = await request(app)
+      .patch(`/api/t/${slugA}/account/profile`)
+      .set('Authorization', `Bearer ${signupRes.body.accessToken}`)
+      .send({ email: 'new-email@example.com' });
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('new-email@example.com');
+
+    const loginRes = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'new-email@example.com', password: 'a-strong-password' });
+    expect(loginRes.status).toBe(200);
+  });
+});
+
+describe('Customer password reset (/account/auth/forgot-password, /reset-password)', () => {
+  let tenantA;
+
+  beforeEach(async () => {
+    await clearDatabase();
+    ({ tenant: tenantA } = await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' }));
+    await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239000',
+      name: 'Reset Me',
+      email: 'resetme@example.com',
+      password: 'original-password',
+    });
+  });
+
+  it('always returns a generic response, whether or not the email has an account', async () => {
+    const known = await request(app).post(`/api/t/${slugA}/account/auth/forgot-password`).send({ email: 'resetme@example.com' });
+    const unknown = await request(app).post(`/api/t/${slugA}/account/auth/forgot-password`).send({ email: 'nobody@example.com' });
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(known.body).toEqual(unknown.body);
+  });
+
+  it('resets the password with a valid token and logs the customer in', async () => {
+    const { Customer: CustomerModel } = await import('../../src/models/Customer.js');
+    const { signCustomerPasswordResetToken } = await import('../../src/lib/jwt.js');
+
+    const customer = await runWithTenant(tenantA._id, async () => CustomerModel.findOne({ email: 'resetme@example.com' }));
+    const token = signCustomerPasswordResetToken({ customerId: customer._id, tenantId: tenantA._id, tokenVersion: customer.tokenVersion });
+
+    const res = await request(app)
+      .post(`/api/t/${slugA}/account/auth/reset-password`)
+      .send({ token, password: 'brand-new-password' });
+    expect(res.status).toBe(200);
+    expect(res.body.accessToken).toEqual(expect.any(String));
+
+    const loginOld = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'resetme@example.com', password: 'original-password' });
+    expect(loginOld.status).toBe(401);
+
+    const loginNew = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'resetme@example.com', password: 'brand-new-password' });
+    expect(loginNew.status).toBe(200);
+  });
+
+  it('rejects a reset token reused a second time (tokenVersion bumped on first use)', async () => {
+    const { Customer: CustomerModel } = await import('../../src/models/Customer.js');
+    const { signCustomerPasswordResetToken } = await import('../../src/lib/jwt.js');
+
+    const customer = await runWithTenant(tenantA._id, async () => CustomerModel.findOne({ email: 'resetme@example.com' }));
+    const token = signCustomerPasswordResetToken({ customerId: customer._id, tenantId: tenantA._id, tokenVersion: customer.tokenVersion });
+
+    const first = await request(app).post(`/api/t/${slugA}/account/auth/reset-password`).send({ token, password: 'first-new-password' });
+    expect(first.status).toBe(200);
+
+    const second = await request(app).post(`/api/t/${slugA}/account/auth/reset-password`).send({ token, password: 'second-new-password' });
+    expect(second.status).toBe(400);
+    expect(second.body.error.code).toBe('RESET_TOKEN_INVALID');
+  });
+
+  it('rejects a reset token minted for a different tenant', async () => {
+    const { tenant: tenantB } = await createTenantWithOwner(app, { slug: slugB, displayName: 'Salon B' });
+    const { Customer: CustomerModel } = await import('../../src/models/Customer.js');
+    const { signCustomerPasswordResetToken } = await import('../../src/lib/jwt.js');
+
+    const customer = await runWithTenant(tenantA._id, async () => CustomerModel.findOne({ email: 'resetme@example.com' }));
+    const token = signCustomerPasswordResetToken({ customerId: customer._id, tenantId: tenantB._id, tokenVersion: customer.tokenVersion });
+
+    const res = await request(app).post(`/api/t/${slugA}/account/auth/reset-password`).send({ token, password: 'wont-work' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('TENANT_MISMATCH');
+  });
+
+  it('rejects a garbage token', async () => {
+    const res = await request(app)
+      .post(`/api/t/${slugA}/account/auth/reset-password`)
+      .send({ token: 'not-a-real-token', password: 'wont-work-either' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('RESET_TOKEN_INVALID');
+  });
+
+  it('verifyCustomerPasswordResetToken rejects a token signed with the wrong audience (sanity check on token family separation)', async () => {
+    const { signCustomerAccessToken } = await import('../../src/lib/jwt.js');
+    const accessToken = signCustomerAccessToken({ customerId: 'x', tenantId: 'y', tokenVersion: 0 });
+    expect(() => verifyCustomerPasswordResetToken(accessToken)).toThrow();
   });
 });
 
@@ -202,6 +401,7 @@ describe('Anonymous public booking is unaffected by customer accounts', () => {
     const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
       phone: '+27820001111',
       name: 'Anon Booker',
+      email: 'anonbooker@example.com',
       password: 'a-strong-password',
     });
     expect(signupRes.status).toBe(201);

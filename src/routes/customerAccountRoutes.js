@@ -166,7 +166,9 @@ router.get('/profile', async (req, res, next) => {
 
 const updateProfileSchema = z.object({
   name: z.string().min(1).max(200).optional(),
-  email: z.string().email().or(z.literal('')).optional(),
+  // No longer clearable to '' - email is the account's login identifier now,
+  // not an optional contact field.
+  email: z.string().email().optional(),
 });
 
 router.patch('/profile', validate(updateProfileSchema), async (req, res, next) => {

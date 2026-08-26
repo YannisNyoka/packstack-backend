@@ -8,6 +8,8 @@ import {
   loginCustomer,
   refreshCustomerAccessToken,
   logoutAllCustomerSessions,
+  requestPasswordReset,
+  resetPassword,
   toPublicCustomer,
 } from '../services/customerAuthService.js';
 import { Customer } from '../models/Customer.js';
@@ -41,7 +43,7 @@ function setRefreshCookie(res, tenantSlug, token) {
 const signupSchema = z.object({
   phone: z.string().min(5),
   name: z.string().min(1).max(200),
-  email: z.string().email().optional(),
+  email: z.string().email(),
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
@@ -64,18 +66,54 @@ router.post('/signup', rateLimitAuthByIp, validate(signupSchema), async (req, re
 });
 
 const loginSchema = z.object({
-  phone: z.string().min(5),
+  email: z.string().email(),
   password: z.string().min(1),
 });
 
 router.post('/login', rateLimitAuthByIp, validate(loginSchema), async (req, res, next) => {
   try {
-    const { phone, password } = req.body;
+    const { email, password } = req.body;
     const { customer, accessToken, refreshToken } = await loginCustomer({
       req,
       tenantId: req.tenant._id,
-      phone,
+      email,
       password,
+    });
+    setRefreshCookie(res, req.params.tenantSlug, refreshToken);
+    res.json({ accessToken, customer });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+router.post('/forgot-password', rateLimitAuthByIp, validate(forgotPasswordSchema), async (req, res, next) => {
+  try {
+    await requestPasswordReset({ req, tenant: req.tenant, email: req.body.email });
+    // Always the same response whether or not the email matches an account -
+    // see requestPasswordReset's own comment.
+    res.json({ message: 'If that email has an account, a reset link has been sent.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+router.post('/reset-password', rateLimitAuthByIp, validate(resetPasswordSchema), async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+    const { customer, accessToken, refreshToken } = await resetPassword({
+      req,
+      tenantId: req.tenant._id,
+      token,
+      newPassword: password,
     });
     setRefreshCookie(res, req.params.tenantSlug, refreshToken);
     res.json({ accessToken, customer });

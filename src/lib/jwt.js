@@ -89,6 +89,25 @@ export function verifyCustomerRefreshToken(token) {
   return jwt.verify(token, env.JWT_CUSTOMER_SECRET, { audience: 'packstack-customer-refresh' });
 }
 
+// Password reset link (mailed to the customer, see notificationService.js
+// sendPasswordResetEmail). Reuses JWT_CUSTOMER_SECRET rather than a fourth
+// dedicated secret - the distinct `audience` claim already keeps it from
+// being usable as an access/refresh token even if intercepted, the same
+// separation this file already relies on between the customer access and
+// refresh pair above. Short-lived, and resetPassword() below additionally
+// checks tokenVersion, so completing a reset (or calling logout-all)
+// invalidates any other outstanding reset link immediately.
+export function signCustomerPasswordResetToken({ customerId, tenantId, tokenVersion }) {
+  return jwt.sign({ sub: String(customerId), tenantId: String(tenantId), tokenVersion }, env.JWT_CUSTOMER_SECRET, {
+    expiresIn: '30m',
+    audience: 'packstack-customer-reset',
+  });
+}
+
+export function verifyCustomerPasswordResetToken(token) {
+  return jwt.verify(token, env.JWT_CUSTOMER_SECRET, { audience: 'packstack-customer-reset' });
+}
+
 // Signs the customer-facing "manage your booking" link (view/reschedule/
 // cancel with no login - see architecture doc §4). Its own secret, distinct
 // from every other token kind here: this one is handed to a customer over

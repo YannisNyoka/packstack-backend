@@ -17,7 +17,9 @@ const slug = 'account-required-salon';
 const futureStart = () => new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
 
 async function signUpCustomer(phone) {
-  const res = await request(app).post(`/api/t/${slug}/account/auth/signup`).send({ phone, name: 'Test Customer', password: 'a-strong-password' });
+  const res = await request(app)
+    .post(`/api/t/${slug}/account/auth/signup`)
+    .send({ phone, name: 'Test Customer', email: `${phone.replace(/\D/g, '')}@example.com`, password: 'a-strong-password' });
   expect(res.status).toBe(201);
   return res.body;
 }

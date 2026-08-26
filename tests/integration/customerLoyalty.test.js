@@ -32,6 +32,7 @@ describe('Customer self-service loyalty (/account/loyalty)', () => {
     const signupRes = await request(app).post(`/api/t/${slug}/account/auth/signup`).send({
       phone: '+27821234567', // matches seedTenantData's Customer
       name: 'Alice Client',
+      email: 'alice@example.com',
       password: 'a-strong-password',
     });
     expect(signupRes.status).toBe(201);
@@ -67,6 +68,7 @@ describe('Customer self-service loyalty (/account/loyalty)', () => {
     const signupRes = await request(app).post(`/api/t/${otherSlug}/account/auth/signup`).send({
       phone: '0829998888',
       name: 'Other Tenant Customer',
+      email: 'other-tenant-customer@example.com',
       password: 'a-strong-password',
     });
 

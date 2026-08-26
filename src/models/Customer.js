@@ -27,6 +27,15 @@ const customerSchema = new Schema(
 
 customerSchema.plugin(tenantScopePlugin);
 customerSchema.index({ tenantId: 1, phone: 1 }, { unique: true });
+// email is the customer account login identifier (see customerAuthService.js)
+// but stays optional at the schema level - an anonymous-booking-only Customer
+// (findOrCreateByPhone) may never set one. Partial index so any number of
+// documents can have email: null without colliding; only real string values
+// are checked for uniqueness.
+customerSchema.index(
+  { tenantId: 1, email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: 'string' } } }
+);
 customerSchema.index({ tenantId: 1, name: 1 });
 
 export const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);

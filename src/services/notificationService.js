@@ -59,6 +59,23 @@ export async function sendBookingConfirmation({ tenant, appointment, customer, s
 }
 
 /**
+ * Same best-effort, never-throws contract as sendBookingConfirmation -
+ * customerAuthService.js#requestPasswordReset always reports success to the
+ * caller regardless of whether this actually goes out, both to avoid leaking
+ * which emails have accounts and because a tenant with Resend not connected
+ * shouldn't turn into a 500 on this endpoint. Email only, unlike the
+ * WhatsApp+email pair above - a password reset link isn't something to hand
+ * out over a channel as easily spoofed/screenshotted-and-shared as WhatsApp.
+ */
+export async function sendPasswordResetEmail({ tenant, customer, resetUrl }) {
+  const message =
+    `Hi ${customer.name}, we received a request to reset your password for your ${tenant.displayName} account. ` +
+    `Reset it here: ${resetUrl} - this link expires in 30 minutes. If you didn't request this, you can ignore this email.`;
+
+  await sendViaEmail({ customer, subject: `Reset your password - ${tenant.displayName}`, message });
+}
+
+/**
  * Same best-effort, never-throws contract as sendBookingConfirmation - fired
  * by services/reminderService.js roughly 24h ahead of the appointment.
  */

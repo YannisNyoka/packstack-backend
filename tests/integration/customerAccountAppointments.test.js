@@ -18,8 +18,12 @@ afterAll(async () => {
 const slug = 'customer-account-appts-salon';
 const futureStart = (daysAhead) => new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
 
+const emailFor = (phone) => `${phone.replace(/\D/g, '')}@example.com`;
+
 async function signUpCustomer({ phone, name }) {
-  const res = await request(app).post(`/api/t/${slug}/account/auth/signup`).send({ phone, name, password: 'a-strong-password' });
+  const res = await request(app)
+    .post(`/api/t/${slug}/account/auth/signup`)
+    .send({ phone, name, email: emailFor(phone), password: 'a-strong-password' });
   expect(res.status).toBe(201);
   return res.body;
 }
@@ -135,7 +139,9 @@ describe('Customer self-service appointments (/account/appointments)', () => {
     await Tenant.findByIdAndUpdate(tenant._id, { status: 'suspended' });
     clearTenantCache();
 
-    const loginRes = await request(app).post(`/api/t/${slug}/account/auth/login`).send({ phone: '0821111010', password: 'a-strong-password' });
+    const loginRes = await request(app)
+      .post(`/api/t/${slug}/account/auth/login`)
+      .send({ email: emailFor('0821111010'), password: 'a-strong-password' });
     expect(loginRes.status).toBe(403);
     expect(loginRes.body.error.code).toBe('TENANT_SUSPENDED');
 
