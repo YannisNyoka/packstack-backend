@@ -11,6 +11,7 @@ import integrationRoutes from './integrationRoutes.js';
 import subscriptionRoutes from './subscriptionRoutes.js';
 import domainRoutes from './domainRoutes.js';
 import tenantSettingsRoutes from './tenantSettingsRoutes.js';
+import analyticsRoutes from './analyticsRoutes.js';
 import customerAccountAuthRoutes from './customerAccountAuthRoutes.js';
 import customerAccountRoutes from './customerAccountRoutes.js';
 
@@ -39,5 +40,6 @@ router.use('/integrations', integrationRoutes);
 router.use('/billing', subscriptionRoutes);
 router.use('/domains', domainRoutes);
 router.use('/settings', tenantSettingsRoutes);
+router.use('/analytics', analyticsRoutes);
 
 export default router;
