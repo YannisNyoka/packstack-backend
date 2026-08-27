@@ -92,10 +92,31 @@ describe('tenant theme (branding) settings', () => {
       businessName: 'Settings Salon',
       tagline: '',
       logoUrl: null,
+      template: 'classic',
       colors: { primary: '#111827', secondary: '#6B7280', accent: '#D946EF' },
       contactInfo: { phone: '', email: '', address: '' },
       socialLinks: { instagram: '', facebook: '', whatsapp: '' },
     });
+  });
+
+  it('lets the owner switch templates, and it persists', async () => {
+    const patchRes = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ template: 'modern' });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.template).toBe('modern');
+
+    const getRes = await request(app).get(`/api/t/${slug}/settings/theme`).set('Authorization', `Bearer ${accessToken}`);
+    expect(getRes.body.template).toBe('modern');
+  });
+
+  it('rejects an unknown template', async () => {
+    const res = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ template: 'not-a-real-template' });
+    expect(res.status).toBe(400);
   });
 
   it('lets the owner update branding, merging nested fields instead of replacing them', async () => {

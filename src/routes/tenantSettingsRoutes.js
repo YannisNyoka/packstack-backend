@@ -69,6 +69,7 @@ const themeUpdateSchema = z
     heroMediaType: z.enum(['image', 'video']),
     heroEnabled: z.boolean(),
     heroBadgeText: z.string().trim().max(100),
+    template: z.enum(['classic', 'modern', 'elegant', 'bold', 'minimal', 'editorial']),
     colors: z
       .object({
         primary: hexColor,
