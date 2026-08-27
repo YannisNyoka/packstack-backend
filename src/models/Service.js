@@ -9,6 +9,7 @@ const serviceSchema = new Schema(
     durationMinutes: { type: Number, required: true, min: 5, max: 24 * 60 },
     price: { type: Number, required: true, min: 0 },
     category: { type: String, default: '', trim: true },
+    imageUrl: { type: String, default: '', trim: true, maxlength: 500 },
     active: { type: Boolean, default: true },
   },
   { timestamps: true }

@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import * as cloudinaryClient from '../lib/providers/cloudinaryClient.js';
 import * as themeService from './themeService.js';
+import * as serviceCatalogService from './serviceCatalogService.js';
 import { ApiError } from '../lib/ApiError.js';
 import { runWithTenant } from '../lib/tenantContext.js';
 
@@ -58,6 +59,47 @@ export async function uploadThemeImage({ req, actorUserId, tenantId, kind, file 
   // time multer hands control back.
   return runWithTenant(tenantId, () =>
     themeService.updateTheme({ req, actorUserId, data: { [field]: result.secure_url } })
+  );
+}
+
+/**
+ * A service's photo, shown alongside it in the booking flow and the
+ * services list - optional, so services with no image just render without
+ * one. Same validation as uploadThemeImage; publicId is keyed by serviceId
+ * (not a fixed kind) so each service has at most one image asset regardless
+ * of how many times it's re-uploaded.
+ */
+export async function uploadServiceImage({ req, actorUserId, tenantId, serviceId, file }) {
+  if (!isCloudinaryConfigured()) {
+    throw ApiError.badRequest('Image uploads are not configured on this server (CLOUDINARY_* env vars missing)');
+  }
+  if (!file) throw ApiError.badRequest('No image file was uploaded');
+  if (!ALLOWED_MIMETYPES.has(file.mimetype)) {
+    throw ApiError.badRequest('Only JPEG, PNG, WebP or GIF images are allowed');
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw ApiError.badRequest('Image must be smaller than 5MB');
+  }
+
+  let result;
+  try {
+    result = await cloudinaryClient.uploadImage({
+      cloudName: env.CLOUDINARY_CLOUD_NAME,
+      apiKey: env.CLOUDINARY_API_KEY,
+      apiSecret: env.CLOUDINARY_API_SECRET,
+      buffer: file.buffer,
+      mimetype: file.mimetype,
+      publicId: `packstack/${tenantId}/services/${serviceId}`,
+    });
+  } catch (err) {
+    throw ApiError.badRequest(`Image upload failed: ${err.message}`);
+  }
+
+  // Same AsyncLocalStorage caveat as uploadThemeImage above - re-bind
+  // tenant context explicitly rather than relying on it surviving multer's
+  // busboy-driven multipart parsing.
+  return runWithTenant(tenantId, () =>
+    serviceCatalogService.updateService({ req, actorUserId, id: serviceId, data: { imageUrl: result.secure_url } })
   );
 }
 
