@@ -209,6 +209,11 @@ describe('Custom domains (Phase 3)', () => {
 
       const { err } = await corsCheck('https://cors-unverified.example');
       expect(err).toBeInstanceOf(Error);
+      // Must be an ApiError (403), not a plain Error - errorHandler.js routes
+      // plain Errors through its generic 500 + Sentry-report branch, and a
+      // disallowed origin (bots, scanners, a stray tab) is routine traffic,
+      // not a bug worth alerting on.
+      expect(err.statusCode).toBe(403);
     });
   });
 });

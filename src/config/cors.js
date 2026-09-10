@@ -1,5 +1,6 @@
 import { env } from './env.js';
 import { DomainMapping } from '../models/DomainMapping.js';
+import { ApiError } from '../lib/ApiError.js';
 
 let verifiedDomainsCache = { expiresAt: 0, domains: new Set() };
 
@@ -39,6 +40,11 @@ export const corsOptions = {
       // malformed origin - fall through to rejection
     }
 
-    callback(new Error(`Origin ${origin} not allowed by CORS policy`));
+    // A plain Error here reaches errorHandler.js's generic fallback branch,
+    // which reports to Sentry - but a disallowed origin is routine traffic
+    // (bots, scanners, a stray browser tab), not a bug worth an alert.
+    // ApiError routes it through errorHandler's dedicated branch instead:
+    // a clean 403, no Sentry noise.
+    callback(ApiError.forbidden(`Origin ${origin} not allowed by CORS policy`));
   },
 };
