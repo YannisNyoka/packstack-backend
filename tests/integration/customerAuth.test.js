@@ -21,12 +21,11 @@ const slugB = 'customer-auth-salon-b';
 
 describe('Customer account auth (/account/auth)', () => {
   let tenantA;
-  let tenantB;
 
   beforeEach(async () => {
     await clearDatabase();
     ({ tenant: tenantA } = await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' }));
-    ({ tenant: tenantB } = await createTenantWithOwner(app, { slug: slugB, displayName: 'Customer Auth Salon B' }));
+    await createTenantWithOwner(app, { slug: slugB, displayName: 'Customer Auth Salon B' });
   });
 
   it('signs up a brand-new phone number, logging in by email', async () => {
@@ -221,11 +220,9 @@ describe('Customer account auth (/account/auth)', () => {
 });
 
 describe('Customer self-service profile (/account/profile)', () => {
-  let tenantA;
-
   beforeEach(async () => {
     await clearDatabase();
-    ({ tenant: tenantA } = await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' }));
+    await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' });
   });
 
   it('rejects clearing email to empty, since it is the login identifier', async () => {

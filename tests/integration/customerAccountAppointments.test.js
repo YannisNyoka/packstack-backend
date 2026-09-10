@@ -28,7 +28,7 @@ async function signUpCustomer({ phone, name }) {
   return res.body;
 }
 
-async function bookAsCustomer({ seed, phone, token, startTime }) {
+async function bookAsCustomer({ seed, phone, startTime }) {
   // Book anonymously with the given phone (the account already exists for
   // that phone, so this appointment attaches to the same Customer._id), then
   // confirm the logged-in customer can see it.
