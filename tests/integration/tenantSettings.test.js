@@ -119,6 +119,26 @@ describe('tenant theme (branding) settings', () => {
     expect(res.status).toBe(400);
   });
 
+  it('lets the owner change where the business name shows, and it persists', async () => {
+    const patchRes = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ businessNamePosition: 'hero' });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.businessNamePosition).toBe('hero');
+
+    const getRes = await request(app).get(`/api/t/${slug}/settings/theme`).set('Authorization', `Bearer ${accessToken}`);
+    expect(getRes.body.businessNamePosition).toBe('hero');
+  });
+
+  it('rejects an unknown business name position', async () => {
+    const res = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ businessNamePosition: 'sidebar' });
+    expect(res.status).toBe(400);
+  });
+
   it('lets the owner update branding, merging nested fields instead of replacing them', async () => {
     const res = await request(app)
       .patch(`/api/t/${slug}/settings/theme`)

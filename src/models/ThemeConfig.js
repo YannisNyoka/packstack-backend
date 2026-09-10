@@ -24,11 +24,21 @@ const themeConfigSchema = new Schema(
     heroEnabled: { type: Boolean, default: true },
     // Small pill shown over the hero, e.g. "Dube, Soweto - Est. 2019".
     heroBadgeText: { type: String, default: '', maxlength: 100 },
+    // Where the business name TEXT renders on the landing page (the logo, if
+    // set, always shows regardless of this) - 'both' matches every
+    // template's original fixed behavior before this setting existed, so a
+    // tenant who's never touched it sees no change. See every template's own
+    // use of businessNameVisibility() in components/landingTemplates/.
+    businessNamePosition: { type: String, enum: ['both', 'nav', 'hero'], default: 'both' },
     // Which landing-page layout renders at packstack-frontend's LandingPreview
     // (nav/hero/section/footer structure) - 'classic' is the original,
     // unstyled-choice design, kept as the default so a tenant who's never
     // touched this setting sees no change.
-    template: { type: String, enum: ['classic', 'modern', 'elegant', 'bold', 'minimal', 'editorial'], default: 'classic' },
+    template: {
+      type: String,
+      enum: ['classic', 'modern', 'elegant', 'bold', 'minimal', 'editorial', 'luxe', 'boutique', 'studio', 'glow', 'heritage', 'loft', 'petal', 'noir'],
+      default: 'classic',
+    },
     colors: {
       primary: { type: String, default: '#111827' },
       secondary: { type: String, default: '#6B7280' },

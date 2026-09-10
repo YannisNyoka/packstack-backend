@@ -69,7 +69,8 @@ const themeUpdateSchema = z
     heroMediaType: z.enum(['image', 'video']),
     heroEnabled: z.boolean(),
     heroBadgeText: z.string().trim().max(100),
-    template: z.enum(['classic', 'modern', 'elegant', 'bold', 'minimal', 'editorial']),
+    template: z.enum(['classic', 'modern', 'elegant', 'bold', 'minimal', 'editorial', 'luxe', 'boutique', 'studio', 'glow', 'heritage', 'loft', 'petal', 'noir']),
+    businessNamePosition: z.enum(['both', 'nav', 'hero']),
     colors: z
       .object({
         primary: hexColor,
