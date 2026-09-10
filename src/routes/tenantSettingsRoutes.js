@@ -91,6 +91,10 @@ const themeUpdateSchema = z
       'velvet',
       'pulse',
       'linen',
+      'sidebar',
+      'neon',
+      'terrazzo',
+      'neumorphic',
     ]),
     businessNamePosition: z.enum(['both', 'nav', 'hero']),
     colors: z
