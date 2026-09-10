@@ -6,6 +6,7 @@ import * as platformService from '../services/platformService.js';
 import platformAuthRoutes from './platformAuthRoutes.js';
 import platformBillingRoutes from './platformBillingRoutes.js';
 import { Plan } from '../models/Plan.js';
+import { ApiError } from '../lib/ApiError.js';
 
 // No tenantResolution() in front of this router at all - see app.js. This
 // is deliberately the one part of the API that isn't tenant-scoped.
@@ -50,6 +51,31 @@ router.post('/tenants', validate(provisionTenantSchema), async (req, res, next) 
   }
 });
 
+router.get('/tenants/:id', async (req, res, next) => {
+  try {
+    res.json(await platformService.getTenantDetail(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const tenantStatusSchema = z.object({
+  status: z.enum(['trial', 'active', 'past_due', 'suspended']),
+});
+
+router.patch('/tenants/:id/status', validate(tenantStatusSchema), async (req, res, next) => {
+  try {
+    const tenant = await platformService.updateTenantStatus({
+      tenantId: req.params.id,
+      status: req.body.status,
+      req,
+    });
+    res.json(tenant);
+  } catch (err) {
+    next(err);
+  }
+});
+
 const planSchema = z.object({
   key: z.string().trim().toLowerCase().min(1).max(50),
   name: z.string().trim().min(1).max(200),
@@ -77,6 +103,18 @@ router.get('/plans', async (req, res, next) => {
 router.post('/plans', validate(planSchema), async (req, res, next) => {
   try {
     res.status(201).json(await Plan.create(req.body));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const planUpdateSchema = planSchema.partial().extend({ active: z.boolean().optional() });
+
+router.patch('/plans/:id', validate(planUpdateSchema), async (req, res, next) => {
+  try {
+    const plan = await Plan.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!plan) throw ApiError.notFound('Plan not found');
+    res.json(plan);
   } catch (err) {
     next(err);
   }
