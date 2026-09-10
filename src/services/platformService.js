@@ -3,10 +3,20 @@ import { Tenant } from '../models/Tenant.js';
 import { User } from '../models/User.js';
 import { ThemeConfig } from '../models/ThemeConfig.js';
 import { Subscription } from '../models/Subscription.js';
+import { StaffMember } from '../models/StaffMember.js';
+import { StaffTimeOff } from '../models/StaffTimeOff.js';
+import { Customer } from '../models/Customer.js';
+import { Service } from '../models/Service.js';
+import { Appointment } from '../models/Appointment.js';
+import { Payment } from '../models/Payment.js';
+import { LoyaltyTransaction } from '../models/LoyaltyTransaction.js';
+import { IntegrationCredential } from '../models/IntegrationCredential.js';
+import { DomainMapping } from '../models/DomainMapping.js';
 import { runWithTenant } from '../lib/tenantContext.js';
 import { clearTenantCache } from '../lib/tenantCache.js';
 import { logAudit } from '../lib/auditLog.js';
 import { hashPassword } from './authService.js';
+import { removeDomainFromVercelProject } from '../lib/providers/vercelClient.js';
 import { ApiError } from '../lib/ApiError.js';
 
 const TENANT_STATUSES = ['trial', 'active', 'past_due', 'suspended'];
@@ -57,9 +67,105 @@ export async function getTenantDetail(tenantId) {
   const tenant = await Tenant.findById(tenantId);
   if (!tenant) throw ApiError.notFound('Tenant not found');
 
-  const subscription = await runWithTenant(tenant._id, () => Subscription.findOne({}).populate('planId'));
+  const { subscription, owner } = await runWithTenant(tenant._id, async () => ({
+    subscription: await Subscription.findOne({}).populate('planId'),
+    owner: await User.findOne({ role: 'owner' }).select('email').sort({ createdAt: 1 }),
+  }));
 
-  return { tenant, subscription };
+  return { tenant, subscription, owner };
+}
+
+/**
+ * Business name is the one Tenant field a superadmin can fix up after the
+ * fact (e.g. a typo at signup) - slug is immutable (Tenant.js), it's baked
+ * into the subdomain and any links already sent to customers.
+ */
+export async function updateTenantProfile({ tenantId, displayName }) {
+  const tenant = await Tenant.findByIdAndUpdate(tenantId, { displayName }, { new: true, runValidators: true });
+  if (!tenant) throw ApiError.notFound('Tenant not found');
+  return tenant;
+}
+
+/**
+ * Changes the tenant's owner login email - e.g. the owner lost access to
+ * their original inbox and can't reset their own password without it. Only
+ * ever touches the *oldest* 'owner' User, matching provisionTenant() which
+ * creates exactly one; if a tenant somehow has more, this deliberately
+ * leaves the rest alone rather than guessing which one the superadmin meant.
+ */
+export async function updateTenantOwnerEmail({ tenantId, email }) {
+  const tenant = await Tenant.findById(tenantId);
+  if (!tenant) throw ApiError.notFound('Tenant not found');
+
+  const owner = await runWithTenant(tenant._id, async () => {
+    const owner = await User.findOne({ role: 'owner' }).sort({ createdAt: 1 });
+    if (!owner) throw ApiError.notFound('This tenant has no owner account');
+
+    owner.email = email.toLowerCase();
+    await owner.save();
+    return owner;
+  });
+
+  return { id: owner._id, email: owner.email };
+}
+
+// Every tenant-scoped model except AuditLog - audit entries are append-only
+// (see models/AuditLog.js's own guard) and deliberately outlive the tenant
+// they describe, the same way deleting a person doesn't erase the news
+// coverage of it. DomainMapping isn't tenant-scoped (models/DomainMapping.js)
+// so it's cleaned up separately, by explicit tenantId filter, below.
+const TENANT_SCOPED_MODELS = [
+  Subscription,
+  ThemeConfig,
+  StaffMember,
+  StaffTimeOff,
+  Customer,
+  Service,
+  Appointment,
+  Payment,
+  LoyaltyTransaction,
+  IntegrationCredential,
+  User,
+];
+
+/**
+ * Permanently deletes a tenant and everything belonging to it. Irreversible -
+ * the frontend requires typing the tenant's slug back to confirm before
+ * calling this. Logs the deletion into the tenant's own (surviving)
+ * AuditLog before removing the Tenant document itself, so there's a
+ * permanent record of when/why a now-nonexistent tenant was removed.
+ */
+export async function deprovisionTenant({ tenantId, req }) {
+  const tenant = await Tenant.findById(tenantId);
+  if (!tenant) throw ApiError.notFound('Tenant not found');
+
+  const domains = await DomainMapping.find({ tenantId: tenant._id });
+  for (const mapping of domains) {
+    try {
+      await removeDomainFromVercelProject(mapping.domain);
+    } catch (err) {
+      console.error(`[platformService] Vercel domain removal failed for ${mapping.domain}: ${err.message}`);
+    }
+  }
+  await DomainMapping.deleteMany({ tenantId: tenant._id });
+
+  await runWithTenant(tenant._id, async () => {
+    for (const Model of TENANT_SCOPED_MODELS) {
+      await Model.deleteMany({});
+    }
+
+    await logAudit({
+      req,
+      actorType: 'superadmin',
+      action: 'platform.tenant_deleted',
+      entityType: 'Tenant',
+      entityId: tenant._id,
+      diff: { before: { slug: tenant.slug, displayName: tenant.displayName, status: tenant.status } },
+    });
+  });
+
+  await Tenant.findByIdAndDelete(tenant._id);
+  clearTenantCache();
 }
 
 /**

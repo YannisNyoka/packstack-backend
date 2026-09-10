@@ -76,6 +76,54 @@ router.patch('/tenants/:id/status', validate(tenantStatusSchema), async (req, re
   }
 });
 
+const tenantProfileSchema = z.object({
+  displayName: z.string().trim().min(1).max(200),
+});
+
+router.patch('/tenants/:id', validate(tenantProfileSchema), async (req, res, next) => {
+  try {
+    const tenant = await platformService.updateTenantProfile({ tenantId: req.params.id, displayName: req.body.displayName });
+    res.json(tenant);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const tenantOwnerSchema = z.object({
+  email: z.string().trim().email(),
+});
+
+router.patch('/tenants/:id/owner', validate(tenantOwnerSchema), async (req, res, next) => {
+  try {
+    const owner = await platformService.updateTenantOwnerEmail({ tenantId: req.params.id, email: req.body.email });
+    res.json(owner);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const tenantDeleteSchema = z.object({
+  slug: z.string().trim().toLowerCase(),
+});
+
+// Requires the tenant's own slug back in the body as a deliberate typed
+// confirmation (mirrors the frontend's "type the slug to confirm" prompt) -
+// this is permanent, cascades across every tenant-scoped collection, and a
+// bare DELETE with just the :id in the URL is too easy to fire accidentally
+// (a stray retry, a copy-pasted curl command) for something this destructive.
+router.delete('/tenants/:id', validate(tenantDeleteSchema), async (req, res, next) => {
+  try {
+    const tenant = await platformService.getTenantDetail(req.params.id);
+    if (tenant.tenant.slug !== req.body.slug) {
+      throw ApiError.badRequest('Slug confirmation does not match this tenant');
+    }
+    await platformService.deprovisionTenant({ tenantId: req.params.id, req });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
 const planSchema = z.object({
   key: z.string().trim().toLowerCase().min(1).max(50),
   name: z.string().trim().min(1).max(200),
