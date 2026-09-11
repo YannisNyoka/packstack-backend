@@ -75,10 +75,15 @@ function loadEnv() {
     process.env.JWT_CUSTOMER_SECRET ||= 'test-customer-secret-test-customer-secret-32';
     process.env.APPOINTMENT_LINK_SECRET ||= 'test-appointment-link-secret-test-32b';
     // PayFast's own published sandbox test credentials - fine to hardcode,
-    // they're meant for exactly this.
-    process.env.PAYFAST_MERCHANT_ID ||= '10000100';
-    process.env.PAYFAST_MERCHANT_KEY ||= '46f0cd694581a';
-    process.env.PAYFAST_PASSPHRASE ||= 'test-passphrase';
+    // they're meant for exactly this. Forced (not ||=) rather than defaulted:
+    // now that a real .env carries live PayFast credentials for production,
+    // ||= would let those leak straight into the test run (that's exactly
+    // what caused the merchant_id mismatch billing.test.js used to show) -
+    // tests must never depend on, or risk touching, the real gateway.
+    process.env.PAYFAST_MODE = 'sandbox';
+    process.env.PAYFAST_MERCHANT_ID = '10000100';
+    process.env.PAYFAST_MERCHANT_KEY = '46f0cd694581a';
+    process.env.PAYFAST_PASSPHRASE = 'test-passphrase';
     process.env.SECRETS_MASTER_KEY ||= Buffer.alloc(32, 1).toString('base64');
     process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:27017/packstack_test';
     // Dummy Cloudinary credentials so mediaService's "configured" branch is
