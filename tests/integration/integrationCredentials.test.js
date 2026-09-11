@@ -24,12 +24,24 @@ const slug = 'integrations-salon';
 describe('Integration credentials (WATI/Resend)', () => {
   let tenant;
   let ownerToken;
+  let fetchSpy;
 
   beforeEach(async () => {
     await clearDatabase();
     const created = await createTenantWithOwner(app, { slug, displayName: 'Integrations Salon' });
     tenant = created.tenant;
     ownerToken = created.accessToken;
+    // connectResendCredential checks the "from" address's domain is verified
+    // on Resend before allowing the connect - mocked verified by default so
+    // tests that aren't specifically about that check don't need to care.
+    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ name: 'nxlbeautybar.co.za', status: 'verified' }] }),
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
   });
 
   it('connects a WATI credential and returns only the masked hint, never the raw token', async () => {
@@ -42,7 +54,7 @@ describe('Integration credentials (WATI/Resend)', () => {
     expect(res.body).toEqual({ provider: 'wati', maskedHint: '••••oken', active: true });
   });
 
-  it('connects a Resend credential', async () => {
+  it('connects a Resend credential once its "from" domain is verified on Resend', async () => {
     const res = await request(app)
       .post(`/api/t/${slug}/integrations/resend`)
       .set('Authorization', `Bearer ${ownerToken}`)
@@ -50,6 +62,49 @@ describe('Integration credentials (WATI/Resend)', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ provider: 'resend', maskedHint: '••••7890', active: true });
+    expect(fetchSpy).toHaveBeenCalledWith('https://api.resend.com/domains', expect.objectContaining({
+      headers: { Authorization: 'Bearer re_test_1234567890' },
+    }));
+  });
+
+  it('rejects connecting Resend with a "from" address at an unverifiable consumer domain like gmail.com', async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ data: [] }) }); // gmail.com will never show up as a verified domain here
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/resend`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ apiKey: 're_test_1234567890', fromEmail: 'owner@gmail.com' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('DOMAIN_NOT_VERIFIED');
+    expect(res.body.error.message).toContain('gmail.com');
+
+    const decrypted = await runWithTenant(tenant._id, async () => getDecryptedCredential('resend'));
+    expect(decrypted).toBeNull(); // nothing stored - a silently-broken connection is worse than none
+  });
+
+  it('rejects connecting Resend with a "from" domain that exists on the account but is still pending verification', async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ data: [{ name: 'nxlbeautybar.co.za', status: 'pending' }] }) });
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/resend`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ apiKey: 're_test_1234567890', fromEmail: 'bookings@nxlbeautybar.co.za' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('DOMAIN_NOT_VERIFIED');
+  });
+
+  it('rejects the connect attempt when Resend refuses the API key outright', async () => {
+    fetchSpy.mockResolvedValue({ ok: false, status: 401, json: async () => ({ message: 'Invalid API key' }) });
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/resend`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ apiKey: 're_test_wrong', fromEmail: 'bookings@nxlbeautybar.co.za' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/invalid api key/i);
   });
 
   it('rejects an invalid connect payload (e.g. non-URL apiEndpoint)', async () => {

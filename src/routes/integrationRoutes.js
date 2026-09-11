@@ -49,12 +49,11 @@ const resendConnectSchema = z.object({
 router.post('/resend', validate(resendConnectSchema), async (req, res, next) => {
   try {
     const { apiKey, fromEmail } = req.body;
-    const result = await integrationCredentialService.connectCredential({
+    const result = await integrationCredentialService.connectResendCredential({
       req,
       actorUserId: req.auth.userId,
-      provider: 'resend',
-      payload: { apiKey, fromEmail },
-      hintValue: apiKey,
+      apiKey,
+      fromEmail,
     });
     res.status(201).json(result);
   } catch (err) {

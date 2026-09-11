@@ -1,6 +1,7 @@
 import { IntegrationCredential } from '../models/IntegrationCredential.js';
 import { encryptSecret, decryptSecret, maskSecret } from '../lib/crypto.js';
 import { createWebhookSubscription } from '../lib/providers/yocoClient.js';
+import { listDomains } from '../lib/providers/resendClient.js';
 import { ApiError } from '../lib/ApiError.js';
 import { logAudit } from '../lib/auditLog.js';
 import { env } from '../config/env.js';
@@ -70,6 +71,39 @@ export async function connectYocoCredential({ req, actorUserId, tenantSlug, secr
     payload: { secretKey, webhookSecret: webhook.secret },
     hintValue: secretKey,
   });
+}
+
+/**
+ * Resend-specific connect: unlike a plain API-key credential, a "from"
+ * address only actually works once its domain is verified on the tenant's
+ * own Resend account (Resend requires DNS proof of ownership - it will
+ * never send from an unverifiable consumer domain like gmail.com/
+ * outlook.com). Without this check, connecting "succeeds" no matter what
+ * fromEmail is given, and every single notification (booking confirmations,
+ * password resets, staff invites) then fails silently afterward - caught
+ * live via Render logs after exactly that happened for a real tenant who'd
+ * entered a gmail.com address. Checking at connect time instead surfaces
+ * the real, actionable Resend error immediately.
+ */
+export async function connectResendCredential({ req, actorUserId, apiKey, fromEmail }) {
+  const domain = fromEmail.split('@')[1]?.toLowerCase();
+
+  let domains;
+  try {
+    domains = await listDomains({ apiKey });
+  } catch (err) {
+    throw ApiError.badRequest(`Could not connect to Resend: ${err.message}`);
+  }
+
+  const match = domains.find((d) => String(d.name).toLowerCase() === domain);
+  if (!match || match.status !== 'verified') {
+    throw ApiError.badRequest(
+      `"${domain}" isn't a verified sending domain on your Resend account yet. Add and verify it at resend.com/domains, then use an email at that domain as your "from" address.`,
+      { code: 'DOMAIN_NOT_VERIFIED' }
+    );
+  }
+
+  return connectCredential({ req, actorUserId, provider: 'resend', payload: { apiKey, fromEmail }, hintValue: apiKey });
 }
 
 export async function disconnectCredential({ req, actorUserId, provider }) {

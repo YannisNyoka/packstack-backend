@@ -16,10 +16,14 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
-    ok: true,
-    json: async () => ({}),
-    text: async () => '',
+  fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+    // connectResendCredential (see connectBothProviders below) checks this
+    // domain is verified before allowing the connect at all - matched here
+    // so that connect actually succeeds rather than rejecting.
+    if (String(url) === 'https://api.resend.com/domains') {
+      return { ok: true, json: async () => ({ data: [{ name: 'notify-salon.example', status: 'verified' }] }) };
+    }
+    return { ok: true, json: async () => ({}), text: async () => '' };
   });
 });
 
@@ -39,6 +43,10 @@ async function connectBothProviders(accessToken) {
     .post(`/api/t/${slug}/integrations/resend`)
     .set('Authorization', `Bearer ${accessToken}`)
     .send({ apiKey: 're_secret_key', fromEmail: 'bookings@notify-salon.example' });
+  // Connecting Resend itself calls out to Resend's domains API (see
+  // connectResendCredential) - clear that call so the fetchSpy assertions
+  // below are only counting the booking's own WhatsApp/email sends.
+  fetchSpy.mockClear();
 }
 
 describe('booking confirmation notifications', () => {

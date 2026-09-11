@@ -1,4 +1,5 @@
 const RESEND_API_URL = 'https://api.resend.com/emails';
+const RESEND_DOMAINS_URL = 'https://api.resend.com/domains';
 const REQUEST_TIMEOUT_MS = 8000;
 
 /** Minimal Resend client - sends a single transactional email. */
@@ -18,4 +19,29 @@ export async function sendEmail({ apiKey, from, to, subject, html }) {
     throw new Error(`Resend request failed (${res.status}): ${body}`);
   }
   return res.json();
+}
+
+/**
+ * Lists the domains verified on this Resend account - used at connect time
+ * (see integrationCredentialService.js#connectResendCredential) to catch a
+ * "from" address at an unverifiable consumer domain (gmail.com etc.) or a
+ * still-pending domain immediately, rather than letting every single
+ * notification fail silently afterward (that's a real incident this caught:
+ * a tenant connected with a gmail.com "from" address, which Resend will
+ * never accept - it requires the sender to own the domain and prove it via
+ * DNS - and every booking confirmation/invite/reset email from that tenant
+ * silently failed until someone checked the server logs).
+ */
+export async function listDomains({ apiKey }) {
+  const res = await fetch(RESEND_DOMAINS_URL, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = body?.message || `Resend request failed (${res.status})`;
+    throw new Error(message);
+  }
+  return body?.data || [];
 }
