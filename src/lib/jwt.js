@@ -108,6 +108,23 @@ export function verifyCustomerPasswordResetToken(token) {
   return jwt.verify(token, env.JWT_CUSTOMER_SECRET, { audience: 'packstack-customer-reset' });
 }
 
+// Staff dashboard invite link (mailed by an owner granting dashboard access
+// - see staffService.js#inviteStaffUser). Reuses JWT_ACCESS_SECRET rather
+// than a dedicated secret, the same "audience claim is the real separation"
+// reasoning as the customer reset token above; tokenVersion is checked on
+// acceptance so accepting the invite (or a later re-invite) invalidates any
+// other outstanding link immediately.
+export function signStaffInviteToken({ userId, tenantId, tokenVersion }) {
+  return jwt.sign({ sub: String(userId), tenantId: String(tenantId), tokenVersion }, env.JWT_ACCESS_SECRET, {
+    expiresIn: '7d',
+    audience: 'packstack-staff-invite',
+  });
+}
+
+export function verifyStaffInviteToken(token) {
+  return jwt.verify(token, env.JWT_ACCESS_SECRET, { audience: 'packstack-staff-invite' });
+}
+
 // Signs the customer-facing "manage your booking" link (view/reschedule/
 // cancel with no login - see architecture doc §4). Its own secret, distinct
 // from every other token kind here: this one is handed to a customer over

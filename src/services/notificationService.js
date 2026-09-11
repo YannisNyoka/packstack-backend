@@ -76,6 +76,33 @@ export async function sendPasswordResetEmail({ tenant, customer, resetUrl }) {
 }
 
 /**
+ * Same best-effort, never-throws contract as sendPasswordResetEmail - and
+ * the same reason staffService.js#inviteStaffUser also hands the owner the
+ * raw inviteUrl back in the API response rather than relying on this alone:
+ * a tenant with Resend not connected shouldn't leave a staff member with no
+ * way to ever get in.
+ */
+export async function sendStaffInviteEmail({ tenant, email, name, inviteUrl }) {
+  const message =
+    `Hi ${name}, ${tenant.displayName} has invited you to their PackStack dashboard. ` +
+    `Set your password to get started: ${inviteUrl} - this link expires in 7 days.`;
+
+  try {
+    const credential = await getDecryptedCredential('resend');
+    if (!credential) return; // tenant hasn't connected Resend - nothing to send
+    await sendEmail({
+      apiKey: credential.apiKey,
+      from: credential.fromEmail,
+      to: email,
+      subject: `You've been invited to ${tenant.displayName}'s dashboard`,
+      html: `<p>${message}</p>`,
+    });
+  } catch (err) {
+    console.error(`[notificationService] Staff invite email send failed: ${err.message}`);
+  }
+}
+
+/**
  * Same best-effort, never-throws contract as sendBookingConfirmation - fired
  * by services/reminderService.js roughly 24h ahead of the appointment.
  */

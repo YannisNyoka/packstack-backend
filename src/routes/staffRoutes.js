@@ -66,6 +66,64 @@ router.patch('/:id', requireRole('owner'), validate(staffUpdateSchema), async (r
   }
 });
 
+const inviteSchema = z.object({ email: z.string().email() });
+
+router.post('/:id/invite', requireRole('owner'), validate(inviteSchema), async (req, res, next) => {
+  try {
+    const result = await staffService.inviteStaffUser({
+      req,
+      actorUserId: req.auth.userId,
+      tenant: req.tenant,
+      staffId: req.params.id,
+      email: req.body.email,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:id/invite', requireRole('owner'), async (req, res, next) => {
+  try {
+    const result = await staffService.cancelStaffInvite({ req, actorUserId: req.auth.userId, staffId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/invite/resend', requireRole('owner'), async (req, res, next) => {
+  try {
+    const result = await staffService.resendStaffInvite({
+      req,
+      actorUserId: req.auth.userId,
+      tenant: req.tenant,
+      staffId: req.params.id,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:id/access', requireRole('owner'), async (req, res, next) => {
+  try {
+    const result = await staffService.revokeStaffAccess({ req, actorUserId: req.auth.userId, staffId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/access/reactivate', requireRole('owner'), async (req, res, next) => {
+  try {
+    const result = await staffService.reactivateStaffAccess({ req, actorUserId: req.auth.userId, staffId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.use('/:staffMemberId/time-off', staffTimeOffRoutes);
 
 export default router;

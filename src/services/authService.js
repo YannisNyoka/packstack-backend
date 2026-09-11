@@ -1,6 +1,11 @@
 import argon2 from 'argon2';
 import { User } from '../models/User.js';
-import { signTenantAccessToken, signTenantRefreshToken, verifyTenantRefreshToken } from '../lib/jwt.js';
+import {
+  signTenantAccessToken,
+  signTenantRefreshToken,
+  verifyTenantRefreshToken,
+  verifyStaffInviteToken,
+} from '../lib/jwt.js';
 import { logAudit } from '../lib/auditLog.js';
 import { ApiError } from '../lib/ApiError.js';
 
@@ -83,6 +88,45 @@ export async function logoutAllSessions({ req, userId }) {
   const user = await User.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
   if (!user) throw ApiError.notFound('User not found');
   await logAudit({ req, actorUserId: userId, action: 'auth.logout_all', entityType: 'User', entityId: userId });
+}
+
+/**
+ * Completes a dashboard invite (see staffService.js#inviteStaffUser): sets
+ * the account's real password and flips it from 'invited' to 'active', the
+ * same shape as customerAuthService.js#resetPassword. tokenVersion is
+ * bumped alongside, invalidating the invite token itself (and any other
+ * outstanding invite link/session) the moment it's used.
+ */
+export async function acceptStaffInvite({ req, tenantId, token, password }) {
+  let payload;
+  try {
+    payload = verifyStaffInviteToken(token);
+  } catch {
+    throw ApiError.badRequest('This invite link is invalid or has expired. Ask your manager to resend it.', {
+      code: 'INVITE_TOKEN_INVALID',
+    });
+  }
+
+  if (String(payload.tenantId) !== String(tenantId)) {
+    throw ApiError.forbidden('Invite does not belong to this tenant', { code: 'TENANT_MISMATCH' });
+  }
+
+  const user = await User.findById(payload.sub).select('+passwordHash');
+  if (!user || user.status !== 'invited' || user.tokenVersion !== payload.tokenVersion) {
+    throw ApiError.badRequest('This invite link is invalid or has expired. Ask your manager to resend it.', {
+      code: 'INVITE_TOKEN_INVALID',
+    });
+  }
+
+  user.passwordHash = await hashPassword(password);
+  user.status = 'active';
+  user.tokenVersion += 1;
+  await user.save();
+
+  await logAudit({ req, actorUserId: user._id, action: 'auth.invite_accepted', entityType: 'User', entityId: user._id });
+
+  const tokens = issueTokens(user, tenantId);
+  return { user, ...tokens };
 }
 
 export async function hashPassword(plaintext) {

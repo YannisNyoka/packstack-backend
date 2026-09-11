@@ -11,7 +11,12 @@ const userSchema = new Schema(
     email: { type: String, required: true, trim: true, lowercase: true },
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ['owner', 'staff'], required: true },
-    status: { type: String, enum: ['active', 'disabled'], default: 'active' },
+    // 'invited' means the account was created by an owner granting dashboard
+    // access but the invite link hasn't been accepted yet - passwordHash is
+    // an unusable placeholder until acceptStaffInvite() replaces it, and
+    // requireAuth() already rejects anything but 'active', so an invited
+    // account simply can't log in yet.
+    status: { type: String, enum: ['active', 'disabled', 'invited'], default: 'active' },
     failedLoginAttempts: { type: Number, default: 0 },
     lockedUntil: { type: Date, default: null },
     tokenVersion: { type: Number, default: 0 },

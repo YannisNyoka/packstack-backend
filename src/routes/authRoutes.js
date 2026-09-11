@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimitAuthByIp } from '../middleware/rateLimit.js';
-import { login, refreshAccessToken, logoutAllSessions } from '../services/authService.js';
+import { login, refreshAccessToken, logoutAllSessions, acceptStaffInvite } from '../services/authService.js';
 import { User } from '../models/User.js';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/ApiError.js';
@@ -45,6 +45,30 @@ router.post('/login', rateLimitAuthByIp, validate(loginSchema), async (req, res,
       req,
       tenantId: req.tenant._id,
       email,
+      password,
+    });
+    setRefreshCookie(res, req.params.tenantSlug, refreshToken);
+    res.json({
+      accessToken,
+      user: { id: user._id, email: user.email, role: user.role, tenantStatus: req.tenant.status, trialEndsAt: req.tenant.trialEndsAt },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const acceptInviteSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8),
+});
+
+router.post('/accept-invite', rateLimitAuthByIp, validate(acceptInviteSchema), async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+    const { user, accessToken, refreshToken } = await acceptStaffInvite({
+      req,
+      tenantId: req.tenant._id,
+      token,
       password,
     });
     setRefreshCookie(res, req.params.tenantSlug, refreshToken);
