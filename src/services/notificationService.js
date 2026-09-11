@@ -2,6 +2,7 @@ import { DateTime } from 'luxon';
 import { getDecryptedCredential } from './integrationCredentialService.js';
 import { sendWhatsAppMessage } from '../lib/providers/watiClient.js';
 import { sendEmail } from '../lib/providers/resendClient.js';
+import { env } from '../config/env.js';
 
 async function sendViaWhatsApp({ customer, message }) {
   if (!customer.phone) return;
@@ -20,29 +21,44 @@ async function sendViaWhatsApp({ customer, message }) {
   }
 }
 
-async function sendViaEmail({ customer, subject, message }) {
-  if (!customer.email) return;
+/**
+ * Prefers the tenant's own connected Resend credential; falls back to
+ * PLATFORM_RESEND_API_KEY/FROM_EMAIL (see env.js) when the tenant hasn't
+ * connected one. That fallback exists because Resend can only ever send
+ * "from" a domain someone has actually verified with DNS records
+ * (connectResendCredential enforces this at connect time) - a small salon
+ * with no domain of its own would otherwise have no way to receive booking
+ * confirmations, password resets, or staff invites at all. Returns null
+ * (meaning: don't send) only when neither is available.
+ */
+async function resolveEmailSender(tenant) {
+  const own = await getDecryptedCredential('resend');
+  if (own) return { apiKey: own.apiKey, from: own.fromEmail };
+
+  if (env.PLATFORM_RESEND_API_KEY && env.PLATFORM_RESEND_FROM_EMAIL) {
+    return { apiKey: env.PLATFORM_RESEND_API_KEY, from: `${tenant.displayName} via PackStack <${env.PLATFORM_RESEND_FROM_EMAIL}>` };
+  }
+
+  return null;
+}
+
+async function sendViaEmail({ tenant, to, subject, message }) {
+  if (!to) return;
   try {
-    const credential = await getDecryptedCredential('resend');
-    if (!credential) return; // tenant hasn't connected Resend - nothing to send
-    await sendEmail({
-      apiKey: credential.apiKey,
-      from: credential.fromEmail,
-      to: customer.email,
-      subject,
-      html: `<p>${message}</p>`,
-    });
+    const sender = await resolveEmailSender(tenant);
+    if (!sender) return; // neither the tenant's own Resend nor the platform fallback is configured
+    await sendEmail({ apiKey: sender.apiKey, from: sender.from, to, subject, html: `<p>${message}</p>` });
   } catch (err) {
     console.error(`[notificationService] Email send failed: ${err.message}`);
   }
 }
 
 /**
- * Fires a booking confirmation over whichever channels the tenant has
- * connected (WhatsApp via WATI, email via Resend, both, or neither - this
- * is a no-op if nothing is connected). Always resolves; per-channel
- * failures are caught and logged rather than thrown, so a provider outage
- * never fails the appointment write that already happened.
+ * Fires a booking confirmation over whichever channels are available
+ * (WhatsApp via WATI if connected, email via the resolved sender above, both,
+ * or neither). Always resolves; per-channel failures are caught and logged
+ * rather than thrown, so a provider outage never fails the appointment write
+ * that already happened.
  */
 export async function sendBookingConfirmation({ tenant, appointment, customer, services, staff, manageUrl }) {
   const start = DateTime.fromJSDate(appointment.startTime, { zone: tenant.timezone });
@@ -54,7 +70,7 @@ export async function sendBookingConfirmation({ tenant, appointment, customer, s
 
   await Promise.all([
     sendViaWhatsApp({ customer, message }),
-    sendViaEmail({ customer, subject: `Booking confirmed - ${tenant.displayName}`, message }),
+    sendViaEmail({ tenant, to: customer.email, subject: `Booking confirmed - ${tenant.displayName}`, message }),
   ]);
 }
 
@@ -62,7 +78,7 @@ export async function sendBookingConfirmation({ tenant, appointment, customer, s
  * Same best-effort, never-throws contract as sendBookingConfirmation -
  * customerAuthService.js#requestPasswordReset always reports success to the
  * caller regardless of whether this actually goes out, both to avoid leaking
- * which emails have accounts and because a tenant with Resend not connected
+ * which emails have accounts and because no email sender being available
  * shouldn't turn into a 500 on this endpoint. Email only, unlike the
  * WhatsApp+email pair above - a password reset link isn't something to hand
  * out over a channel as easily spoofed/screenshotted-and-shared as WhatsApp.
@@ -72,34 +88,22 @@ export async function sendPasswordResetEmail({ tenant, customer, resetUrl }) {
     `Hi ${customer.name}, we received a request to reset your password for your ${tenant.displayName} account. ` +
     `Reset it here: ${resetUrl} - this link expires in 30 minutes. If you didn't request this, you can ignore this email.`;
 
-  await sendViaEmail({ customer, subject: `Reset your password - ${tenant.displayName}`, message });
+  await sendViaEmail({ tenant, to: customer.email, subject: `Reset your password - ${tenant.displayName}`, message });
 }
 
 /**
  * Same best-effort, never-throws contract as sendPasswordResetEmail - and
  * the same reason staffService.js#inviteStaffUser also hands the owner the
  * raw inviteUrl back in the API response rather than relying on this alone:
- * a tenant with Resend not connected shouldn't leave a staff member with no
- * way to ever get in.
+ * a staff member shouldn't be left with no way to ever get in just because
+ * no email sender is configured.
  */
 export async function sendStaffInviteEmail({ tenant, email, name, inviteUrl }) {
   const message =
     `Hi ${name}, ${tenant.displayName} has invited you to their PackStack dashboard. ` +
     `Set your password to get started: ${inviteUrl} - this link expires in 7 days.`;
 
-  try {
-    const credential = await getDecryptedCredential('resend');
-    if (!credential) return; // tenant hasn't connected Resend - nothing to send
-    await sendEmail({
-      apiKey: credential.apiKey,
-      from: credential.fromEmail,
-      to: email,
-      subject: `You've been invited to ${tenant.displayName}'s dashboard`,
-      html: `<p>${message}</p>`,
-    });
-  } catch (err) {
-    console.error(`[notificationService] Staff invite email send failed: ${err.message}`);
-  }
+  await sendViaEmail({ tenant, to: email, subject: `You've been invited to ${tenant.displayName}'s dashboard`, message });
 }
 
 /**
@@ -116,6 +120,6 @@ export async function sendAppointmentReminder({ tenant, appointment, customer, s
 
   await Promise.all([
     sendViaWhatsApp({ customer, message }),
-    sendViaEmail({ customer, subject: `Reminder: your appointment tomorrow - ${tenant.displayName}`, message }),
+    sendViaEmail({ tenant, to: customer.email, subject: `Reminder: your appointment tomorrow - ${tenant.displayName}`, message }),
   ]);
 }

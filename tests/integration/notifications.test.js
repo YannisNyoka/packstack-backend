@@ -2,6 +2,7 @@ import { jest } from '@jest/globals';
 import request from 'supertest';
 import { connectTestDB, disconnectTestDB, clearDatabase, buildTestApp } from '../helpers/testApp.js';
 import { createTenantWithOwner, seedTenantData } from '../helpers/factories.js';
+import { env } from '../../src/config/env.js';
 
 let app;
 let fetchSpy;
@@ -119,6 +120,56 @@ describe('booking confirmation notifications', () => {
 
     expect(res.status).toBe(201);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to PackStack's own shared sender when the tenant has no Resend account connected", async () => {
+    env.PLATFORM_RESEND_API_KEY = 'platform-resend-key';
+    env.PLATFORM_RESEND_FROM_EMAIL = 'notifications@packstack.co.za';
+    try {
+      const res = await request(app)
+        .post(`/api/t/${slug}/public/appointments`)
+        .send({
+          staffMemberId: String(seed.staff._id),
+          serviceIds: [String(seed.service._id)],
+          startTime: futureStart(),
+          customerDetails: { phone: '+27829998888', name: 'Fallback Client', email: 'client@example.com' },
+        });
+
+      expect(res.status).toBe(201);
+      const resendCall = fetchSpy.mock.calls.find(([url]) => String(url) === 'https://api.resend.com/emails');
+      expect(resendCall).toBeDefined();
+      expect(resendCall[1].headers.Authorization).toBe('Bearer platform-resend-key');
+      const resendBody = JSON.parse(resendCall[1].body);
+      expect(resendBody.from).toBe('Notify Salon via PackStack <notifications@packstack.co.za>');
+    } finally {
+      delete env.PLATFORM_RESEND_API_KEY;
+      delete env.PLATFORM_RESEND_FROM_EMAIL;
+    }
+  });
+
+  it("prefers the tenant's own connected Resend account over the platform fallback when both are available", async () => {
+    env.PLATFORM_RESEND_API_KEY = 'platform-resend-key';
+    env.PLATFORM_RESEND_FROM_EMAIL = 'notifications@packstack.co.za';
+    try {
+      await connectBothProviders(accessToken);
+
+      const res = await request(app)
+        .post(`/api/t/${slug}/public/appointments`)
+        .send({
+          staffMemberId: String(seed.staff._id),
+          serviceIds: [String(seed.service._id)],
+          startTime: futureStart(),
+          customerDetails: { phone: '+27829998888', name: 'Priority Client', email: 'client@example.com' },
+        });
+
+      expect(res.status).toBe(201);
+      const resendCall = fetchSpy.mock.calls.find(([url]) => String(url) === 'https://api.resend.com/emails');
+      const resendBody = JSON.parse(resendCall[1].body);
+      expect(resendBody.from).toBe('bookings@notify-salon.example'); // the tenant's own - not the platform fallback
+    } finally {
+      delete env.PLATFORM_RESEND_API_KEY;
+      delete env.PLATFORM_RESEND_FROM_EMAIL;
+    }
   });
 
   it('still creates the booking when the notification provider call fails', async () => {

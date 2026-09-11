@@ -63,6 +63,20 @@ const envSchema = z.object({
   VERCEL_API_TOKEN: z.string().optional(),
   VERCEL_TEAM_ID: z.string().optional(),
   VERCEL_PROJECT_ID: z.string().default('packstack-frontend'),
+
+  // Shared fallback email sender (see notificationService.js#resolveEmailSender)
+  // for tenants who haven't connected their own Resend account - Resend can
+  // only ever send "from" a domain someone has actually verified with DNS
+  // records, so a tenant with no domain of their own (the common case for a
+  // small salon) would otherwise have no way to get booking confirmations,
+  // password resets, or staff invites out at all. PLATFORM_RESEND_FROM_EMAIL
+  // must be at a domain verified on the account PLATFORM_RESEND_API_KEY
+  // belongs to (e.g. a subdomain of packstack.co.za) - both optional, same
+  // reasoning as every other platform-level credential here: the app still
+  // boots without them, tenants just fall back further to "no email at all"
+  // until either this or their own Resend connection exists.
+  PLATFORM_RESEND_API_KEY: z.string().optional(),
+  PLATFORM_RESEND_FROM_EMAIL: z.string().email().optional(),
 });
 
 function loadEnv() {
