@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: npm ci
       - run: npm run billing:expire-past-due
         env:
@@ -23,6 +23,7 @@ jobs:
           JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
           JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
           JWT_SUPERADMIN_SECRET: ${{ secrets.JWT_SUPERADMIN_SECRET }}
+          JWT_CUSTOMER_SECRET: ${{ secrets.JWT_CUSTOMER_SECRET }}
           APPOINTMENT_LINK_SECRET: ${{ secrets.APPOINTMENT_LINK_SECRET }}
           SECRETS_MASTER_KEY: ${{ secrets.SECRETS_MASTER_KEY }}
           PAYFAST_MODE: sandbox
