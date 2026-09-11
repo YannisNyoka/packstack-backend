@@ -35,11 +35,21 @@ function signWebhook({ webhookId, webhookTimestamp, rawBody }) {
   return `v1,${sig}`;
 }
 
+// Connecting now also registers a webhook subscription with Yoco itself
+// (services/integrationCredentialService.js#connectYocoCredential) - mock
+// that call here, scoped to just this one request, so it doesn't leak into
+// whatever fetch mock each test sets up afterward for checkout creation.
 async function connectYoco(accessToken) {
-  return request(app)
+  const subscriptionSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: true,
+    json: async () => ({ id: 'wh_sub_test', secret: WEBHOOK_SECRET }),
+  });
+  const res = await request(app)
     .post(`/api/t/${slug}/integrations/yoco`)
     .set('Authorization', `Bearer ${accessToken}`)
-    .send({ secretKey: 'sk_test_abc123', webhookSecret: WEBHOOK_SECRET });
+    .send({ secretKey: 'sk_test_abc123' });
+  subscriptionSpy.mockRestore();
+  return res;
 }
 
 async function requireDeposit(accessToken, amountZAR = 100) {
