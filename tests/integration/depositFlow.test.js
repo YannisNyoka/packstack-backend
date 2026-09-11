@@ -47,7 +47,7 @@ async function connectYoco(accessToken) {
   const res = await request(app)
     .post(`/api/t/${slug}/integrations/yoco`)
     .set('Authorization', `Bearer ${accessToken}`)
-    .send({ secretKey: 'sk_test_abc123' });
+    .send({ secretKey: 'sk_test_abc123', apiKey: 'yoco_test_devconsole456' });
   subscriptionSpy.mockRestore();
   return res;
 }

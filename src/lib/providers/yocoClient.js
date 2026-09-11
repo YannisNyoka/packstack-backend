@@ -44,12 +44,18 @@ export async function createCheckout({ secretKey, amountZAR, successUrl, cancelU
  * implies, it's API-only. Yoco generates and returns a fresh `whsec_...`
  * secret in the response, visible only this once - callers must persist it
  * immediately (see integrationCredentialService.connectYocoCredential).
+ *
+ * apiKey here is deliberately NOT the same credential as createCheckout's
+ * secretKey - confirmed by testing directly against Yoco's API (the Checkout
+ * secret key 401s here). This is a Developer Console "API key"
+ * (developer.yoco.com/ui/, yoco_test_.../yoco_live_...) with webhook
+ * permissions granted, a different Yoco credential system entirely.
  */
-export async function createWebhookSubscription({ secretKey, notificationUrl, name }) {
+export async function createWebhookSubscription({ apiKey, notificationUrl, name }) {
   const res = await fetch(WEBHOOK_SUBSCRIPTIONS_URL, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${secretKey}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

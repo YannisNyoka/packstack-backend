@@ -45,15 +45,27 @@ export async function connectCredential({ req, actorUserId, provider, payload, h
  * webhook subscription registered with Yoco itself before it can work -
  * there's no dashboard field for this, it's API-only (see
  * lib/providers/yocoClient.js#createWebhookSubscription), and Yoco returns
- * the webhook secret exactly once, in that call's response. Doing the
- * registration here means the tenant only ever has to paste their secret
- * key - never a webhook secret they'd have no ordinary way to obtain.
+ * the webhook secret exactly once, in that call's response.
+ *
+ * Two different Yoco credentials are involved, confirmed against Yoco's own
+ * docs and by testing directly against their API - the Checkout API secret
+ * key does NOT work for webhook registration, it 401s:
+ *   - secretKey (sk_test_/sk_live_, from the Checkout API integration page)
+ *     is used for creating checkouts (services/depositService.js).
+ *   - apiKey (yoco_test_/yoco_live_, from a Developer Console application -
+ *     developer.yoco.com/ui/ - with "Modify webhooks" permission granted)
+ *     is what actually authorizes the webhook subscription call. A live-mode
+ *     application also needs to clear Yoco's own review before this
+ *     succeeds; a sandbox-mode one works immediately.
+ * Doing the registration here means the tenant only ever has to paste these
+ * two keys once - never a webhook secret they'd have no ordinary way to
+ * obtain themselves.
  */
-export async function connectYocoCredential({ req, actorUserId, tenantSlug, secretKey }) {
+export async function connectYocoCredential({ req, actorUserId, tenantSlug, secretKey, apiKey }) {
   let subscription;
   try {
     subscription = await createWebhookSubscription({
-      secretKey,
+      apiKey,
       notificationUrl: `${env.API_BASE_URL}/api/t/${tenantSlug}/public/deposit-webhook`,
       name: `PackStack deposits - ${tenantSlug}`,
     });
@@ -65,7 +77,7 @@ export async function connectYocoCredential({ req, actorUserId, tenantSlug, secr
     req,
     actorUserId,
     provider: 'yoco',
-    payload: { secretKey, webhookSecret: subscription.secret },
+    payload: { secretKey, apiKey, webhookSecret: subscription.secret },
     hintValue: secretKey,
   });
 }
