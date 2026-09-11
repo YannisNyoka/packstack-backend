@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import request from 'supertest';
 import { connectTestDB, disconnectTestDB, clearDatabase, buildTestApp } from '../helpers/testApp.js';
 import { createTenantWithOwner } from '../helpers/factories.js';
@@ -5,6 +6,7 @@ import { runWithTenant } from '../../src/lib/tenantContext.js';
 import { User } from '../../src/models/User.js';
 import { hashPassword } from '../../src/services/authService.js';
 import { getDecryptedCredential } from '../../src/services/integrationCredentialService.js';
+import { env } from '../../src/config/env.js';
 
 let app;
 
@@ -111,5 +113,74 @@ describe('Integration credentials (WATI/Resend)', () => {
 
     const decrypted = await runWithTenant(tenant._id, () => getDecryptedCredential('resend'));
     expect(decrypted).toEqual({ apiKey: 're_test_1234567890', fromEmail: 'bookings@nxlbeautybar.co.za' });
+  });
+});
+
+describe('Yoco: registers the webhook subscription automatically', () => {
+  let tenant;
+  let ownerToken;
+  let fetchSpy;
+
+  beforeEach(async () => {
+    await clearDatabase();
+    const created = await createTenantWithOwner(app, { slug, displayName: 'Integrations Salon' });
+    tenant = created.tenant;
+    ownerToken = created.accessToken;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+  });
+
+  it("connects with only a secret key - Yoco's generated webhook secret is stored, never asked of the tenant", async () => {
+    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'wh_sub_123', secret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=' }),
+    });
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/yoco`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ secretKey: 'sk_test_abc123' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ provider: 'yoco', maskedHint: '••••c123', active: true });
+
+    const [fetchUrl, fetchOpts] = fetchSpy.mock.calls[0];
+    expect(fetchUrl).toBe('https://api.yoco.com/v1/webhooks/subscriptions/');
+    expect(fetchOpts.headers.Authorization).toBe('Bearer sk_test_abc123');
+    const sentBody = JSON.parse(fetchOpts.body);
+    expect(sentBody.event_types).toEqual(['payment.succeeded']);
+    expect(sentBody.notification_url).toBe(`${env.API_BASE_URL}/api/t/${slug}/public/deposit-webhook`);
+
+    const decrypted = await runWithTenant(tenant._id, () => getDecryptedCredential('yoco'));
+    expect(decrypted).toEqual({ secretKey: 'sk_test_abc123', webhookSecret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=' });
+  });
+
+  it('rejects the connect attempt (and stores nothing) when Yoco refuses the secret key', async () => {
+    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: 'Forbidden' }),
+    });
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/yoco`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ secretKey: 'sk_test_wrong' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/Forbidden/);
+
+    const decrypted = await runWithTenant(tenant._id, () => getDecryptedCredential('yoco'));
+    expect(decrypted).toBeNull();
+  });
+
+  it('rejects a connect payload with no secret key', async () => {
+    const res = await request(app)
+      .post(`/api/t/${slug}/integrations/yoco`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({});
+    expect(res.status).toBe(400);
   });
 });

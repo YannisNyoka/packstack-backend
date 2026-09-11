@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 const CHECKOUT_URL = 'https://payments.yoco.com/api/checkouts';
+const WEBHOOK_SUBSCRIPTIONS_URL = 'https://api.yoco.com/v1/webhooks/subscriptions/';
 const REQUEST_TIMEOUT_MS = 10000;
 
 /**
@@ -33,6 +34,38 @@ export async function createCheckout({ secretKey, amountZAR, successUrl, cancelU
     throw new Error(message);
   }
   return body; // { id, redirectUrl, status, amount, currency, metadata, ... }
+}
+
+/**
+ * Registers a webhook subscription with Yoco (POST /v1/webhooks/subscriptions/,
+ * per developer.yoco.com/docs/api/webhooks) so Yoco has somewhere to deliver
+ * payment.succeeded events for this tenant's deposit checkouts - there's no
+ * dashboard field for this despite what Yoco's own "how to connect" panel
+ * implies, it's API-only. Yoco generates and returns a fresh `whsec_...`
+ * secret in the response, visible only this once - callers must persist it
+ * immediately (see integrationCredentialService.connectYocoCredential).
+ */
+export async function createWebhookSubscription({ secretKey, notificationUrl, name }) {
+  const res = await fetch(WEBHOOK_SUBSCRIPTIONS_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      event_types: ['payment.succeeded'],
+      name,
+      notification_url: notificationUrl,
+    }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = body?.message || body?.error || `Yoco webhook subscription failed (${res.status})`;
+    throw new Error(message);
+  }
+  return body; // { id, secret, notification_url, event_types, ... }
 }
 
 /**

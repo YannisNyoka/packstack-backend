@@ -1,7 +1,9 @@
 import { IntegrationCredential } from '../models/IntegrationCredential.js';
 import { encryptSecret, decryptSecret, maskSecret } from '../lib/crypto.js';
+import { createWebhookSubscription } from '../lib/providers/yocoClient.js';
 import { ApiError } from '../lib/ApiError.js';
 import { logAudit } from '../lib/auditLog.js';
+import { env } from '../config/env.js';
 
 const PUBLIC_FIELDS = 'provider maskedHint active connectedByUserId createdAt updatedAt';
 
@@ -35,6 +37,37 @@ export async function connectCredential({ req, actorUserId, provider, payload, h
   });
 
   return { provider: credential.provider, maskedHint: credential.maskedHint, active: credential.active };
+}
+
+/**
+ * Yoco-specific connect: unlike WATI/Resend (the tenant already has whatever
+ * credential they're pasting), a Yoco deposit integration also needs a
+ * webhook subscription registered with Yoco itself before it can work -
+ * there's no dashboard field for this, it's API-only (see
+ * lib/providers/yocoClient.js#createWebhookSubscription), and Yoco returns
+ * the webhook secret exactly once, in that call's response. Doing the
+ * registration here means the tenant only ever has to paste their secret
+ * key - never a webhook secret they'd have no ordinary way to obtain.
+ */
+export async function connectYocoCredential({ req, actorUserId, tenantSlug, secretKey }) {
+  let subscription;
+  try {
+    subscription = await createWebhookSubscription({
+      secretKey,
+      notificationUrl: `${env.API_BASE_URL}/api/t/${tenantSlug}/public/deposit-webhook`,
+      name: `PackStack deposits - ${tenantSlug}`,
+    });
+  } catch (err) {
+    throw ApiError.badRequest(`Could not connect to Yoco: ${err.message}`);
+  }
+
+  return connectCredential({
+    req,
+    actorUserId,
+    provider: 'yoco',
+    payload: { secretKey, webhookSecret: subscription.secret },
+    hintValue: secretKey,
+  });
 }
 
 export async function disconnectCredential({ req, actorUserId, provider }) {
