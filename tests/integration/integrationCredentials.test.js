@@ -132,58 +132,54 @@ describe('Yoco: registers the webhook subscription automatically', () => {
     fetchSpy?.mockRestore();
   });
 
-  it("connects with a secret key and a Developer Console API key - Yoco's generated webhook secret is stored, never asked of the tenant", async () => {
+  it("connects with only a secret key - Yoco's generated webhook secret is stored, never asked of the tenant", async () => {
     fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ id: 'wh_sub_123', secret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=' }),
+      json: async () => ({ id: 'sub_123', name: 'PackStack deposits - integrations-salon', mode: 'test', secret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=' }),
     });
 
     const res = await request(app)
       .post(`/api/t/${slug}/integrations/yoco`)
       .set('Authorization', `Bearer ${ownerToken}`)
-      .send({ secretKey: 'sk_test_abc123', apiKey: 'yoco_test_xyz789' });
+      .send({ secretKey: 'sk_test_abc123' });
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ provider: 'yoco', maskedHint: '••••c123', active: true });
 
-    // The subscription call is authorized with the Developer Console API
-    // key, NOT the Checkout secret key - confirmed live against Yoco's API
-    // that the secret key 401s there.
+    // Registered on the Checkout API's own webhooks endpoint (same host,
+    // same secret key as checkout creation) - confirmed live against
+    // Yoco's API. The separate api.yoco.com "Yoco API" webhooks system
+    // (a different credential entirely) was a dead end.
     const [fetchUrl, fetchOpts] = fetchSpy.mock.calls[0];
-    expect(fetchUrl).toBe('https://api.yoco.com/v1/webhooks/subscriptions/');
-    expect(fetchOpts.headers.Authorization).toBe('Bearer yoco_test_xyz789');
+    expect(fetchUrl).toBe('https://payments.yoco.com/api/webhooks');
+    expect(fetchOpts.headers.Authorization).toBe('Bearer sk_test_abc123');
     const sentBody = JSON.parse(fetchOpts.body);
-    expect(sentBody.event_types).toEqual(['payment.succeeded']);
-    expect(sentBody.notification_url).toBe(`${env.API_BASE_URL}/api/t/${slug}/public/deposit-webhook`);
+    expect(sentBody.url).toBe(`${env.API_BASE_URL}/api/t/${slug}/public/deposit-webhook`);
 
     const decrypted = await runWithTenant(tenant._id, () => getDecryptedCredential('yoco'));
-    expect(decrypted).toEqual({
-      secretKey: 'sk_test_abc123',
-      apiKey: 'yoco_test_xyz789',
-      webhookSecret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=',
-    });
+    expect(decrypted).toEqual({ secretKey: 'sk_test_abc123', webhookSecret: 'whsec_c2VjcmV0Zm9ydGVzdGluZzEyMzQ=' });
   });
 
-  it('rejects the connect attempt (and stores nothing) when Yoco refuses the API key', async () => {
+  it('rejects the connect attempt (and stores nothing) when Yoco refuses the secret key', async () => {
     fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: false,
-      status: 403,
-      json: async () => ({ message: 'Forbidden' }),
+      status: 401,
+      json: async () => ({ message: 'The provided credentials are invalid.' }),
     });
 
     const res = await request(app)
       .post(`/api/t/${slug}/integrations/yoco`)
       .set('Authorization', `Bearer ${ownerToken}`)
-      .send({ secretKey: 'sk_test_abc123', apiKey: 'yoco_test_wrong' });
+      .send({ secretKey: 'sk_test_wrong' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toMatch(/Forbidden/);
+    expect(res.body.error.message).toMatch(/invalid/i);
 
     const decrypted = await runWithTenant(tenant._id, () => getDecryptedCredential('yoco'));
     expect(decrypted).toBeNull();
   });
 
-  it('rejects a connect payload missing either key', async () => {
+  it('rejects a connect payload with no secret key', async () => {
     const res = await request(app)
       .post(`/api/t/${slug}/integrations/yoco`)
       .set('Authorization', `Bearer ${ownerToken}`)

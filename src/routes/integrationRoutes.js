@@ -64,18 +64,16 @@ router.post('/resend', validate(resendConnectSchema), async (req, res, next) => 
 
 const yocoConnectSchema = z.object({
   secretKey: z.string().min(1),
-  apiKey: z.string().min(1),
 });
 
 router.post('/yoco', validate(yocoConnectSchema), async (req, res, next) => {
   try {
-    const { secretKey, apiKey } = req.body;
+    const { secretKey } = req.body;
     const result = await integrationCredentialService.connectYocoCredential({
       req,
       actorUserId: req.auth.userId,
       tenantSlug: req.params.tenantSlug,
       secretKey,
-      apiKey,
     });
     res.status(201).json(result);
   } catch (err) {
