@@ -1,0 +1,26 @@
+name: Keep backend warm
+
+# Render's free/starter tier spins the web service down after ~15 minutes
+# with no inbound traffic, so the first real request after that pays a slow
+# cold-start penalty (workers waking, the process re-initializing). Any HTTP
+# request resets that idle timer, so a ping every 5 minutes - well inside
+# the 15-minute window - keeps it warm without ever letting it sleep. /healthz
+# is deliberately the target: no DB round-trip, no auth, the smallest
+# possible "is the process alive" check (see src/app.js).
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /healthz
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" https://api.packstack.co.za/healthz)
+          echo "healthz responded with $status"
+          if [ "$status" != "200" ]; then
+            echo "::error::Backend health check failed with status $status"
+            exit 1
+          fi
