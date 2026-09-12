@@ -16,7 +16,8 @@
     "billing:expire-past-due": "node src/jobs/expirePastDueSubscriptions.js",
     "deposits:expire-stale": "node src/jobs/expireStalePendingPayments.js",
     "reminders:send": "node src/jobs/sendAppointmentReminders.js",
-    "trials:expire": "node src/jobs/expireTrials.js"
+    "trials:expire": "node src/jobs/expireTrials.js",
+    "audit-logs:prune": "node src/jobs/pruneAuditLogs.js"
   },
   "dependencies": {
     "@sentry/node": "^10.70.0",
