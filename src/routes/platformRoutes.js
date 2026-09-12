@@ -34,6 +34,14 @@ const provisionTenantSchema = z.object({
   currency: z.string().optional(),
 });
 
+router.get('/overview', async (req, res, next) => {
+  try {
+    res.json(await platformService.getBusinessOverview());
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/tenants', async (req, res, next) => {
   try {
     res.json(await platformService.listTenants());

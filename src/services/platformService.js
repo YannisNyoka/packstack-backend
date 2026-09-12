@@ -58,8 +58,78 @@ export async function provisionTenant({ slug, displayName, ownerEmail, ownerPass
   return tenant;
 }
 
+const TENANT_STATUS_KEYS = ['trial', 'active', 'past_due', 'suspended'];
+
 export async function listTenants() {
   return Tenant.find({}).sort({ createdAt: -1 });
+}
+
+/**
+ * Aggregate business metrics for the superadmin Overview page: how many
+ * tenants exist, broken down by status, how many have ever actually been
+ * charged real money (as opposed to just having an R0 card-authorization
+ * on file), current MRR, and a signups-by-month series for a simple trend
+ * chart.
+ *
+ * Subscription is tenant-scoped (tenantScopePlugin) - there's no cross-
+ * tenant aggregate query available for it (see the plugin's own comment on
+ * why runAsPlatform() doesn't unlock this), so this loops every tenant and
+ * binds each one's own context individually, the same "explicit, audited
+ * cross-tenant read" shape as billingService.js's expireTrials()/
+ * expirePastDueSubscriptions(). Fine at today's tenant count; if that ever
+ * becomes a real bottleneck, the right fix is a deliberate aggregateAsPlatform()
+ * escape hatch on the plugin itself, not bypassing it ad hoc here.
+ */
+export async function getBusinessOverview() {
+  const tenants = await Tenant.find({}).select('_id status createdAt').lean();
+
+  const byStatus = Object.fromEntries(TENANT_STATUS_KEYS.map((key) => [key, 0]));
+  for (const tenant of tenants) {
+    if (byStatus[tenant.status] !== undefined) byStatus[tenant.status] += 1;
+  }
+
+  let everCharged = 0;
+  let mrr = 0;
+  for (const tenant of tenants) {
+    await runWithTenant(tenant._id, async () => {
+      const subscription = await Subscription.findOne({}).populate('planId');
+      if (!subscription) return;
+
+      // Only ever set inside handlePayfastItn's COMPLETE + amountGross > 0
+      // branch (billingService.js) - the reliable "has this tenant actually
+      // been debited at least once" signal, unlike billingProviderSubscriptionToken
+      // (also set on the R0 trial-authorization ITN, before any real charge).
+      if (subscription.currentPeriodEnd) everCharged += 1;
+
+      if ((tenant.status === 'active' || tenant.status === 'past_due') && subscription.planId) {
+        const price = subscription.planId.priceZAR;
+        mrr += subscription.planId.billingInterval === 'annual' ? price / 12 : price;
+      }
+    });
+  }
+
+  // Signups per month for the last 6 months, oldest first - a fixed window
+  // rather than "since the first tenant ever" keeps this cheap and the
+  // chart legible regardless of how long the platform has been running.
+  const monthCount = 6;
+  const firstMonth = DateTime.now().startOf('month').minus({ months: monthCount - 1 });
+  const buckets = new Map();
+  for (let i = 0; i < monthCount; i += 1) {
+    buckets.set(firstMonth.plus({ months: i }).toFormat('yyyy-LL'), 0);
+  }
+  for (const tenant of tenants) {
+    const key = DateTime.fromJSDate(tenant.createdAt).toFormat('yyyy-LL');
+    if (buckets.has(key)) buckets.set(key, buckets.get(key) + 1);
+  }
+  const signupsByMonth = Array.from(buckets, ([month, count]) => ({ month, count }));
+
+  return {
+    totalTenants: tenants.length,
+    byStatus,
+    everCharged,
+    mrr: Math.round(mrr * 100) / 100,
+    signupsByMonth,
+  };
 }
 
 /**
