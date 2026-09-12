@@ -9,6 +9,11 @@ const themeConfigSchema = new Schema(
     tagline: { type: String, default: '', maxlength: 300 },
     logoUrl: { type: String, default: null },
     bannerUrl: { type: String, default: null },
+    // Explicit override for the browser tab icon (packstack-frontend's
+    // useTenantDocumentHead) - most tenants are fine with one auto-cropped
+    // from logoUrl, but a wide/rectangular logo can crop badly at favicon
+    // size, so this lets a tenant supply a purpose-made square image instead.
+    faviconUrl: { type: String, default: null },
     // The public landing page's hero section (see packstack-frontend's
     // LandingPage.jsx) - bannerUrl above is the image variant, heroVideoUrls
     // the video variant (rotating carousel of the tenant's own short service

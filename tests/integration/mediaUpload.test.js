@@ -77,6 +77,23 @@ describe('theme image uploads', () => {
     expect(res.body.logoUrl).toBeNull();
   });
 
+  it('uploads a favicon into faviconUrl, not logoUrl or bannerUrl', async () => {
+    mockCloudinarySuccess('https://res.cloudinary.com/test-cloud/image/upload/v1/packstack/test/favicon.png');
+
+    const res = await request(app)
+      .post(`/api/t/${slug}/settings/theme/favicon`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .attach('image', PNG_BYTES, { filename: 'favicon.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.faviconUrl).toBe('https://res.cloudinary.com/test-cloud/image/upload/v1/packstack/test/favicon.png');
+    expect(res.body.logoUrl).toBeNull();
+    expect(res.body.bannerUrl).toBeNull();
+
+    const [, options] = fetchSpy.mock.calls[0];
+    expect(options.body.get('public_id')).toMatch(/^packstack\/[a-f0-9]{24}\/favicon$/);
+  });
+
   it('rejects a non-image file', async () => {
     const res = await request(app)
       .post(`/api/t/${slug}/settings/theme/logo`)

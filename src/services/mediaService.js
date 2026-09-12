@@ -18,11 +18,13 @@ export function isCloudinaryConfigured() {
   return Boolean(env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET);
 }
 
+const THEME_IMAGE_FIELD_BY_KIND = { logo: 'logoUrl', banner: 'bannerUrl', favicon: 'faviconUrl' };
+
 /**
- * kind is 'logo' | 'banner' - picks both the ThemeConfig field to update and
- * the Cloudinary publicId (packstack/<tenantId>/<kind>), so a tenant only
- * ever has at most one logo asset and one banner asset regardless of how
- * many times they re-upload.
+ * kind is 'logo' | 'banner' | 'favicon' - picks both the ThemeConfig field to
+ * update and the Cloudinary publicId (packstack/<tenantId>/<kind>), so a
+ * tenant only ever has at most one asset of each kind regardless of how many
+ * times they re-upload.
  */
 export async function uploadThemeImage({ req, actorUserId, tenantId, kind, file }) {
   if (!isCloudinaryConfigured()) {
@@ -50,7 +52,7 @@ export async function uploadThemeImage({ req, actorUserId, tenantId, kind, file 
     throw ApiError.badRequest(`Image upload failed: ${err.message}`);
   }
 
-  const field = kind === 'logo' ? 'logoUrl' : 'bannerUrl';
+  const field = THEME_IMAGE_FIELD_BY_KIND[kind];
   // multer's multipart parsing consumes the raw request stream through its
   // own event-driven parser (busboy), whose async resource chain predates
   // tenantResolution.js's runWithTenant() call - AsyncLocalStorage context

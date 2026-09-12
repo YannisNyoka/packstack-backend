@@ -177,6 +177,28 @@ describe('tenant theme (branding) settings', () => {
     expect(res.status).toBe(400);
   });
 
+  it('lets the owner set a custom faviconUrl independent of logoUrl, and it persists', async () => {
+    const res = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ faviconUrl: 'https://cdn.example.com/favicon.png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.faviconUrl).toBe('https://cdn.example.com/favicon.png');
+    expect(res.body.logoUrl).toBeNull();
+
+    const getRes = await request(app).get(`/api/t/${slug}/settings/theme`).set('Authorization', `Bearer ${accessToken}`);
+    expect(getRes.body.faviconUrl).toBe('https://cdn.example.com/favicon.png');
+  });
+
+  it('rejects a faviconUrl that is not http(s)', async () => {
+    const res = await request(app)
+      .patch(`/api/t/${slug}/settings/theme`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ faviconUrl: 'javascript:alert(1)' });
+    expect(res.status).toBe(400);
+  });
+
   it('rejects staff from updating branding', async () => {
     const { User } = await import('../../src/models/User.js');
     const { Tenant } = await import('../../src/models/Tenant.js');

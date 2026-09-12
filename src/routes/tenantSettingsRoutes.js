@@ -64,6 +64,7 @@ const themeUpdateSchema = z
     tagline: z.string().trim().max(300),
     logoUrl: urlOrEmpty,
     bannerUrl: urlOrEmpty,
+    faviconUrl: urlOrEmpty,
     heroVideoUrl: urlOrEmpty,
     heroVideoUrls: z.array(urlOrEmpty).max(6),
     heroMediaType: z.enum(['image', 'video']),
@@ -195,6 +196,21 @@ router.post('/theme/banner', requireRole('owner'), uploadSingleImage, async (req
       actorUserId: req.auth.userId,
       tenantId: req.tenant._id,
       kind: 'banner',
+      file: req.file,
+    });
+    res.json(theme);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/theme/favicon', requireRole('owner'), uploadSingleImage, async (req, res, next) => {
+  try {
+    const theme = await mediaService.uploadThemeImage({
+      req,
+      actorUserId: req.auth.userId,
+      tenantId: req.tenant._id,
+      kind: 'favicon',
       file: req.file,
     });
     res.json(theme);
