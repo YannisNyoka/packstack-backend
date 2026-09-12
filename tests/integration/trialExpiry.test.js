@@ -69,7 +69,7 @@ describe('billingService.expireTrials', () => {
 
   it('leaves a trial tenant alone if trialEndsAt has not passed yet', async () => {
     const { tenant } = await createTenantWithOwner(app, { slug, displayName: 'Trial Salon' });
-    // Default trialEndsAt from provisioning is ~30 days out already, but be explicit.
+    // Default trialEndsAt from provisioning is already TRIAL_LENGTH_DAYS out, but be explicit.
     await Tenant.findByIdAndUpdate(tenant._id, { trialEndsAt: DateTime.now().plus({ days: 5 }).toJSDate() });
 
     const result = await expireTrials();

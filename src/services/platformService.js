@@ -21,10 +21,15 @@ import { ApiError } from '../lib/ApiError.js';
 
 const TENANT_STATUSES = ['trial', 'active', 'past_due', 'suspended'];
 
-// Every new tenant gets a month of full access before billingService's
+// Every new tenant gets this many days of full access before billingService's
 // expireTrials() sweep suspends them if they haven't subscribed - see that
-// function's own docstring for what "suspended" actually restricts.
-export const TRIAL_LENGTH_DAYS = 30;
+// function's own docstring for what "suspended" actually restricts. The
+// signup flow (packstack marketing site's Signup.jsx) already collects a
+// card via PayFast's hosted checkout immediately after provisioning - see
+// createCheckoutForPlan's deferred R0-authorization comment in
+// billingService.js - so this is "days before the real debit fires", not
+// "days before a card is required".
+export const TRIAL_LENGTH_DAYS = 14;
 
 /**
  * Provisions a new tenant: the Tenant document itself (no tenant context
