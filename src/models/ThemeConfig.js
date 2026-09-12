@@ -62,6 +62,7 @@ const themeConfigSchema = new Schema(
         'neon',
         'terrazzo',
         'neumorphic',
+        'flare',
       ],
       default: 'classic',
     },
