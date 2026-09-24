@@ -66,6 +66,22 @@ export async function refreshAccessToken({ refreshToken }) {
   return issueTokens(admin);
 }
 
+/**
+ * Server-side revocation for a single logout - see the matching comment on
+ * customerAuthService.js#logoutCustomer for the full reasoning. Best-effort:
+ * no missing/invalid refresh token is ever an error here.
+ */
+export async function logoutUser({ refreshToken }) {
+  if (!refreshToken) return;
+  let payload;
+  try {
+    payload = verifySuperAdminRefreshToken(refreshToken);
+  } catch {
+    return;
+  }
+  await SuperAdminUser.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
+}
+
 export async function logoutAllSessions({ userId }) {
   const admin = await SuperAdminUser.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
   if (!admin) throw ApiError.notFound('Account not found');

@@ -17,8 +17,9 @@ const customerInputSchema = z.object({
 });
 
 const customerUpdateSchema = customerInputSchema.partial();
+const listCustomersQuerySchema = z.object({ search: z.string().optional() });
 
-router.get('/', async (req, res, next) => {
+router.get('/', validate(listCustomersQuerySchema, 'query'), async (req, res, next) => {
   try {
     res.json(await customerService.listCustomers({ search: req.query.search }));
   } catch (err) {

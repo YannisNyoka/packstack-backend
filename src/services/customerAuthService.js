@@ -169,6 +169,44 @@ export async function refreshCustomerAccessToken({ tenantId, refreshToken }) {
   return issueTokens(customer, tenantId);
 }
 
+/**
+ * Server-side revocation for a single logout - previously POST /logout only
+ * cleared the client's cookie, so a refresh token captured before logout
+ * (device compromise, log leak, proxy) stayed fully valid for up to 30 days
+ * afterwards, making "logout" a purely client-side no-op against anyone who
+ * already had the token. Bumping tokenVersion is the only revocation
+ * primitive this codebase has (no per-token/jti tracking - see
+ * logoutAllCustomerSessions above), so this necessarily ends every session
+ * for the account, not just the one that clicked logout - a stricter
+ * guarantee than "just this device," and the same trade-off logout-all
+ * already makes deliberately. Best-effort: a missing/invalid/already-expired
+ * refresh token means there's nothing left to revoke, so this quietly
+ * no-ops rather than erroring - logout should never fail just because the
+ * session was already gone.
+ */
+export async function logoutCustomer({ req, tenantId, refreshToken }) {
+  if (!refreshToken) return;
+  let payload;
+  try {
+    payload = verifyCustomerRefreshToken(refreshToken);
+  } catch {
+    return;
+  }
+  if (String(payload.tenantId) !== String(tenantId)) return;
+
+  const customer = await Customer.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
+  if (!customer) return;
+
+  await logAudit({
+    req,
+    actorType: 'customer',
+    actorCustomerId: payload.sub,
+    action: 'customer_auth.logout',
+    entityType: 'Customer',
+    entityId: payload.sub,
+  });
+}
+
 export async function logoutAllCustomerSessions({ req, customerId }) {
   const customer = await Customer.findByIdAndUpdate(customerId, { $inc: { tokenVersion: 1 } }, { new: true });
   if (!customer) throw ApiError.notFound('Account not found');
@@ -261,7 +299,17 @@ export async function resetPassword({ req, tenantId, token, newPassword }) {
   return { customer: toPublicCustomer(customer), ...tokens };
 }
 
-export async function changeCustomerPassword({ req, customerId, currentPassword, newPassword }) {
+/**
+ * Bumps tokenVersion alongside the change, same as resetPassword above - a
+ * voluntary password change is exactly the moment a customer would expect
+ * every OTHER session/refresh-token to be killed (e.g. they suspect a
+ * device they no longer control is still logged in). Unlike resetPassword,
+ * the caller already holds a currently-valid access token for this same
+ * customer, so fresh tokens are issued back and the caller's own session
+ * continues seamlessly instead of getting immediately logged out by its own
+ * password change - see routes/customerAccountRoutes.js's /password handler.
+ */
+export async function changeCustomerPassword({ req, tenantId, customerId, currentPassword, newPassword }) {
   const customer = await Customer.findById(customerId).select('+passwordHash');
   if (!customer || !customer.passwordHash) throw ApiError.notFound('Account not found');
 
@@ -269,6 +317,7 @@ export async function changeCustomerPassword({ req, customerId, currentPassword,
   if (!currentValid) throw ApiError.badRequest('Current password is incorrect');
 
   customer.passwordHash = await hashPassword(newPassword);
+  customer.tokenVersion += 1;
   await customer.save();
 
   await logAudit({
@@ -279,6 +328,8 @@ export async function changeCustomerPassword({ req, customerId, currentPassword,
     entityType: 'Customer',
     entityId: customerId,
   });
+
+  return issueTokens(customer, tenantId);
 }
 
 export async function updateOwnProfile({ req, customerId, name, email }) {

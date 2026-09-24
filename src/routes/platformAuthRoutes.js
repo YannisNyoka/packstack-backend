@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { rateLimitAuthByIp } from '../middleware/rateLimit.js';
-import { login, refreshAccessToken, logoutAllSessions } from '../services/superAdminAuthService.js';
+import { login, refreshAccessToken, logoutUser, logoutAllSessions } from '../services/superAdminAuthService.js';
 import { SuperAdminUser } from '../models/SuperAdminUser.js';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/ApiError.js';
@@ -69,9 +69,14 @@ router.get('/me', requireSuperAdmin(), async (req, res, next) => {
   }
 });
 
-router.post('/logout', (req, res) => {
-  res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
-  res.status(204).end();
+router.post('/logout', async (req, res, next) => {
+  try {
+    await logoutUser({ refreshToken: req.cookies?.[REFRESH_COOKIE_NAME] });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/logout-all', requireSuperAdmin(), async (req, res, next) => {

@@ -120,6 +120,24 @@ describe('POST /api/platform/auth/logout-all', () => {
   });
 });
 
+describe('POST /api/platform/auth/logout', () => {
+  it('revokes the refresh token server-side, not just the client cookie', async () => {
+    await createSuperAdmin();
+    const agent = request.agent(app);
+
+    await agent.post('/api/platform/auth/login').send({ email: EMAIL, password: PASSWORD });
+    await agent.post('/api/platform/auth/logout');
+
+    const refreshRes = await agent.post('/api/platform/auth/refresh');
+    expect(refreshRes.status).toBe(401);
+  });
+
+  it('with no cookie is a harmless no-op', async () => {
+    const res = await request(app).post('/api/platform/auth/logout');
+    expect(res.status).toBe(204);
+  });
+});
+
 describe('superadmin routes still reject a tenant-user token', () => {
   it('rejects a request to /api/platform/tenants with no token', async () => {
     const res = await request(app).get('/api/platform/tenants');

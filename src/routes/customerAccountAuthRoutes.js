@@ -7,6 +7,7 @@ import {
   signUpCustomer,
   loginCustomer,
   refreshCustomerAccessToken,
+  logoutCustomer,
   logoutAllCustomerSessions,
   requestPasswordReset,
   resetPassword,
@@ -145,9 +146,14 @@ router.get('/me', requireCustomerAuth(), async (req, res, next) => {
   }
 });
 
-router.post('/logout', (req, res) => {
-  res.clearCookie(REFRESH_COOKIE_NAME, { path: refreshCookiePath(req.params.tenantSlug) });
-  res.status(204).end();
+router.post('/logout', async (req, res, next) => {
+  try {
+    await logoutCustomer({ req, tenantId: req.tenant._id, refreshToken: req.cookies?.[REFRESH_COOKIE_NAME] });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: refreshCookiePath(req.params.tenantSlug) });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/logout-all', requireCustomerAuth(), async (req, res, next) => {

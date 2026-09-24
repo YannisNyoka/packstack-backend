@@ -27,8 +27,16 @@ export function errorHandler(err, req, res, next) {
   }
 
   if (err?.name === 'ZodError') {
+    // Most callers only ever render `error.message` (see the frontend's
+    // ApiError) rather than digging into `details` - surfacing the first
+    // field/reason here means a real mistake (e.g. a too-long note) reads as
+    // "notes: String must contain at most 1000 character(s)" instead of a
+    // bare, unhelpful "Validation failed" no matter which field caused it.
+    const issues = err.issues ?? [];
+    const [firstIssue] = issues;
+    const message = firstIssue ? `${firstIssue.path.join('.') || 'request'}: ${firstIssue.message}` : 'Validation failed';
     return res.status(400).json({
-      error: { message: 'Validation failed', code: 'VALIDATION_ERROR', details: err.flatten?.() ?? err.issues },
+      error: { message, code: 'VALIDATION_ERROR', details: err.flatten?.() ?? issues },
     });
   }
 

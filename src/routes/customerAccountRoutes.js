@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireCustomerAuth } from '../middleware/auth.js';
+import { rateLimitBookingByTenant } from '../middleware/rateLimit.js';
 import * as appointmentService from '../services/appointmentService.js';
 import * as depositService from '../services/depositService.js';
 import { getLoyaltyHistory } from '../services/loyaltyService.js';
 import { changeCustomerPassword, updateOwnProfile, toPublicCustomer } from '../services/customerAuthService.js';
 import { Customer } from '../models/Customer.js';
 import { ApiError } from '../lib/ApiError.js';
+import { env } from '../config/env.js';
 
 // Self-service surface for a logged-in customer account - view/manage their
 // OWN appointments and loyalty points. Distinct from customerRoutes.js,
@@ -15,6 +17,26 @@ import { ApiError } from '../lib/ApiError.js';
 // requireAuth() (staff login), not this router's requireCustomerAuth().
 const router = Router({ mergeParams: true });
 router.use(requireCustomerAuth());
+
+// Matches customerAccountAuthRoutes.js's own cookie exactly (name, path,
+// options) - changeCustomerPassword below issues a fresh refresh token
+// (see that service function's own comment), which needs to land in the
+// same cookie the auth router's /refresh endpoint reads from.
+const REFRESH_COOKIE_NAME = 'ps_customer_refresh';
+
+function refreshCookiePath(tenantSlug) {
+  return `/api/t/${tenantSlug}/account/auth`;
+}
+
+function setRefreshCookie(res, tenantSlug, token) {
+  res.cookie(REFRESH_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: env.NODE_ENV === 'production',
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: refreshCookiePath(tenantSlug),
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+}
 
 const FINAL_STATUSES = ['cancelled', 'completed', 'no_show'];
 
@@ -44,7 +66,7 @@ const createAppointmentSchema = z.object({
 // only booking path once a tenant turns off anonymous booking
 // (Tenant.bookingRules.requireCustomerAccount), but it works for any
 // logged-in customer regardless of that setting.
-router.post('/appointments', validate(createAppointmentSchema), async (req, res, next) => {
+router.post('/appointments', rateLimitBookingByTenant, validate(createAppointmentSchema), async (req, res, next) => {
   try {
     const appointment = await appointmentService.createAppointment({
       req,
@@ -59,7 +81,7 @@ router.post('/appointments', validate(createAppointmentSchema), async (req, res,
   }
 });
 
-router.post('/appointments/checkout', validate(createAppointmentSchema), async (req, res, next) => {
+router.post('/appointments/checkout', rateLimitBookingByTenant, validate(createAppointmentSchema), async (req, res, next) => {
   try {
     const result = await depositService.createDepositCheckout({
       req,
@@ -192,13 +214,15 @@ const changePasswordSchema = z.object({
 
 router.post('/password', validate(changePasswordSchema), async (req, res, next) => {
   try {
-    await changeCustomerPassword({
+    const { accessToken, refreshToken } = await changeCustomerPassword({
       req,
+      tenantId: req.tenant._id,
       customerId: req.customerAuth.customerId,
       currentPassword: req.body.currentPassword,
       newPassword: req.body.newPassword,
     });
-    res.status(204).end();
+    setRefreshCookie(res, req.params.tenantSlug, refreshToken);
+    res.json({ accessToken });
   } catch (err) {
     next(err);
   }

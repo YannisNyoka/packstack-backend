@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimitAuthByIp } from '../middleware/rateLimit.js';
-import { login, refreshAccessToken, logoutAllSessions, acceptStaffInvite } from '../services/authService.js';
+import { login, refreshAccessToken, logoutUser, logoutAllSessions, acceptStaffInvite } from '../services/authService.js';
 import { User } from '../models/User.js';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/ApiError.js';
@@ -112,9 +112,14 @@ router.get('/me', requireAuth(), async (req, res, next) => {
   }
 });
 
-router.post('/logout', (req, res) => {
-  res.clearCookie(REFRESH_COOKIE_NAME, { path: refreshCookiePath(req.params.tenantSlug) });
-  res.status(204).end();
+router.post('/logout', async (req, res, next) => {
+  try {
+    await logoutUser({ req, tenantId: req.tenant._id, refreshToken: req.cookies?.[REFRESH_COOKIE_NAME] });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: refreshCookiePath(req.params.tenantSlug) });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/logout-all', requireAuth(), async (req, res, next) => {

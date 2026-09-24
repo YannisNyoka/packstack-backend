@@ -40,3 +40,28 @@ describe('GET /api/t/:slug/auth/me', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('POST /api/t/:slug/auth/logout', () => {
+  const logoutSlug = 'logout-salon';
+
+  beforeEach(async () => {
+    await clearDatabase();
+  });
+
+  it('revokes the refresh token server-side, not just the client cookie', async () => {
+    await createTenantWithOwner(app, { slug: logoutSlug, displayName: 'Logout Salon', ownerEmail: 'owner@logout-salon.example' });
+    const agent = request.agent(app);
+
+    await agent.post(`/api/t/${logoutSlug}/auth/login`).send({ email: 'owner@logout-salon.example', password: 'correct-horse-battery-staple' });
+    await agent.post(`/api/t/${logoutSlug}/auth/logout`);
+
+    const refreshRes = await agent.post(`/api/t/${logoutSlug}/auth/refresh`);
+    expect(refreshRes.status).toBe(401);
+  });
+
+  it('with no cookie is a harmless no-op', async () => {
+    await createTenantWithOwner(app, { slug: logoutSlug, displayName: 'Logout Salon' });
+    const res = await request(app).post(`/api/t/${logoutSlug}/auth/logout`);
+    expect(res.status).toBe(204);
+  });
+});

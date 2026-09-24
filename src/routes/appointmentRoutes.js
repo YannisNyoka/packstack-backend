@@ -28,7 +28,20 @@ const rescheduleSchema = z.object({ newStartTime: z.string() });
 const cancelSchema = z.object({ reason: z.string().max(1000).optional() });
 const statusSchema = z.object({ status: z.enum(['confirmed', 'completed', 'no_show']) });
 
-router.get('/', async (req, res, next) => {
+// Query values arrive as strings (or, for an unvalidated route, whatever
+// shape Express's qs parser produces from bracket syntax like
+// `?staffMemberId[$ne]=null` - see appointmentService.listAppointments,
+// which passes these straight into a Mongo filter). Pinning every field to
+// z.string() here closes that off: zod rejects anything that isn't a plain
+// string before it ever reaches the query builder.
+const listAppointmentsQuerySchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  staffMemberId: z.string().optional(),
+  status: z.enum(['pending_payment', 'booked', 'confirmed', 'completed', 'cancelled', 'no_show']).optional(),
+});
+
+router.get('/', validate(listAppointmentsQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { from, to, staffMemberId, status } = req.query;
     res.json(await appointmentService.listAppointments({ from, to, staffMemberId, status }));

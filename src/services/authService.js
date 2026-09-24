@@ -84,6 +84,30 @@ export async function refreshAccessToken({ tenantId, refreshToken }) {
   return issueTokens(user, tenantId);
 }
 
+/**
+ * Server-side revocation for a single logout - see the matching comment on
+ * customerAuthService.js#logoutCustomer for the full reasoning (previously a
+ * no-op against anyone already holding the refresh token; tokenVersion is
+ * the only revocation primitive available, so this necessarily ends every
+ * session for the account, not just this one). Best-effort: no
+ * missing/invalid refresh token is ever an error here.
+ */
+export async function logoutUser({ req, tenantId, refreshToken }) {
+  if (!refreshToken) return;
+  let payload;
+  try {
+    payload = verifyTenantRefreshToken(refreshToken);
+  } catch {
+    return;
+  }
+  if (String(payload.tenantId) !== String(tenantId)) return;
+
+  const user = await User.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
+  if (!user) return;
+
+  await logAudit({ req, actorUserId: payload.sub, action: 'auth.logout', entityType: 'User', entityId: payload.sub });
+}
+
 export async function logoutAllSessions({ req, userId }) {
   const user = await User.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
   if (!user) throw ApiError.notFound('User not found');

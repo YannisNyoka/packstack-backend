@@ -217,6 +217,28 @@ describe('Customer account auth (/account/auth)', () => {
     const res = await request(app).get(`/api/t/${slugA}/account/auth/me`).set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(401);
   });
+
+  it('logout revokes the refresh token server-side, not just the client cookie', async () => {
+    const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821234009',
+      name: 'Logout Test',
+      email: 'logouttest@example.com',
+      password: 'a-strong-password',
+    });
+    const cookie = signupRes.headers['set-cookie'].find((c) => c.startsWith('ps_customer_refresh='));
+
+    await request(app).post(`/api/t/${slugA}/account/auth/logout`).set('Cookie', cookie);
+
+    // The refresh token that was live at logout time must no longer work -
+    // if logout only cleared the client cookie, this would still succeed.
+    const res = await request(app).post(`/api/t/${slugA}/account/auth/refresh`).set('Cookie', cookie);
+    expect(res.status).toBe(401);
+  });
+
+  it('logout with no cookie is a harmless no-op', async () => {
+    const res = await request(app).post(`/api/t/${slugA}/account/auth/logout`);
+    expect(res.status).toBe(204);
+  });
 });
 
 describe('Customer self-service profile (/account/profile)', () => {
@@ -421,5 +443,60 @@ describe('Anonymous public booking is unaffected by customer accounts', () => {
         customerDetails: { phone: '0820001111', name: 'Anon Booker' },
       });
     expect(secondBookRes.status).toBe(201);
+  });
+});
+
+describe('Customer self-service password change (/account/password)', () => {
+  beforeEach(async () => {
+    await clearDatabase();
+    await createTenantWithOwner(app, { slug: slugA, displayName: 'Customer Auth Salon A' });
+  });
+
+  it('rejects the wrong current password', async () => {
+    const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239200',
+      name: 'Password Change',
+      email: 'passwordchange@example.com',
+      password: 'a-strong-password',
+    });
+    const res = await request(app)
+      .post(`/api/t/${slugA}/account/password`)
+      .set('Authorization', `Bearer ${signupRes.body.accessToken}`)
+      .send({ currentPassword: 'wrong-password', newPassword: 'a-new-strong-password' });
+    expect(res.status).toBe(400);
+  });
+
+  it('changes the password, revokes prior sessions, and returns a fresh working access token', async () => {
+    const signupRes = await request(app).post(`/api/t/${slugA}/account/auth/signup`).send({
+      phone: '0821239201',
+      name: 'Password Change',
+      email: 'passwordchange2@example.com',
+      password: 'a-strong-password',
+    });
+    const oldToken = signupRes.body.accessToken;
+    const oldCookie = signupRes.headers['set-cookie'].find((c) => c.startsWith('ps_customer_refresh='));
+
+    const changeRes = await request(app)
+      .post(`/api/t/${slugA}/account/password`)
+      .set('Authorization', `Bearer ${oldToken}`)
+      .send({ currentPassword: 'a-strong-password', newPassword: 'a-new-strong-password' });
+    expect(changeRes.status).toBe(200);
+    const newToken = changeRes.body.accessToken;
+    expect(newToken).toEqual(expect.any(String));
+    expect(newToken).not.toBe(oldToken);
+
+    // The refresh token issued at signup must now be dead...
+    const oldRefreshRes = await request(app).post(`/api/t/${slugA}/account/auth/refresh`).set('Cookie', oldCookie);
+    expect(oldRefreshRes.status).toBe(401);
+
+    // ...but the fresh access token this same request got back keeps working.
+    const meRes = await request(app).get(`/api/t/${slugA}/account/auth/me`).set('Authorization', `Bearer ${newToken}`);
+    expect(meRes.status).toBe(200);
+
+    // And the new password actually took effect.
+    const loginRes = await request(app)
+      .post(`/api/t/${slugA}/account/auth/login`)
+      .send({ email: 'passwordchange2@example.com', password: 'a-new-strong-password' });
+    expect(loginRes.status).toBe(200);
   });
 });
