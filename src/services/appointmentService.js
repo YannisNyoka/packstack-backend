@@ -340,6 +340,42 @@ export async function createAppointment({
   return appointment;
 }
 
+const SLOT_TAKEN_CANCEL_REASON = 'This slot was taken by someone else before your deposit was confirmed.';
+
+/**
+ * A paid deposit that can't actually be honored is a real money problem,
+ * not a routine booking conflict - loud on purpose (console.error alone
+ * isn't reliably monitored; this needs a human to see it and issue a refund
+ * through Yoco directly, since this codebase has no refund API call).
+ * Shared by both places confirmPendingPaymentAppointment below can discover
+ * this: right when it tries to confirm and finds the slot just went to
+ * someone else, and when a webhook for an already-cancelled appointment
+ * (proactively cancelled because a sibling won the same slot first, or
+ * released by the stale-payment sweep) turns out to have actually succeeded
+ * after all.
+ */
+async function flagUnhonorableDeposit(appointment, tenant) {
+  console.error(
+    `[appointmentService] Deposit paid but appointment ${appointment._id} could not be honored (status: ${appointment.status}) - needs a manual refund.`
+  );
+  Sentry.captureMessage('Paid deposit could not be honored - manual refund needed', {
+    level: 'error',
+    extra: { appointmentId: String(appointment._id), tenantId: String(appointment.tenantId), status: appointment.status },
+  });
+
+  await logAudit({
+    actorType: 'superadmin', // no logged-in user/customer - the Yoco webhook triggered this, same convention as billingService.js's ITN handling
+    action: 'appointment.deposit_conflict_cancelled',
+    entityType: 'Appointment',
+    entityId: appointment._id,
+    diff: { after: { status: appointment.status } },
+  });
+
+  await sendDepositConflictNotice({ tenant, customer: appointment.customerId }).catch((notifyErr) => {
+    console.error(`[appointmentService] deposit conflict notice failed: ${notifyErr.message}`);
+  });
+}
+
 /**
  * Promotes a 'pending_payment' appointment (see createAppointment above) to
  * a real booking once its deposit has actually landed, and sends the
@@ -356,13 +392,36 @@ export async function createAppointment({
  * this appointment instead of confirming it and reports which happened, so
  * the caller (depositService.js) can tell the customer their money is safe
  * but the slot is gone rather than silently double-booking or going quiet.
+ *
+ * On success, also proactively cancels every OTHER pending_payment
+ * appointment still sitting on this exact same slot - other customers who
+ * started a checkout for it but haven't paid yet, so their hold doesn't
+ * linger only to be discovered as a conflict later. If one of them turns
+ * out to have already paid (their own webhook arrives after this), the
+ * fallback branch below still catches it and flags it the same way,
+ * exactly like a conflict discovered at confirmation time - a cancelled
+ * appointment must never silently swallow a successful charge.
  */
 export async function confirmPendingPaymentAppointment(appointmentId) {
-  const appointment = await Appointment.findOne({ _id: appointmentId, status: 'pending_payment' })
-    .populate('customerId staffMemberId serviceIds');
-  if (!appointment) return null; // already confirmed/cancelled, or webhook arrived twice - not an error
+  const appointment = await Appointment.findById(appointmentId).populate('customerId staffMemberId serviceIds');
+  if (!appointment) return null; // no such appointment at all - not an error
+
+  if (appointment.status === 'booked') {
+    return { appointment, confirmed: true }; // already confirmed - webhook arrived twice, idempotent no-op
+  }
 
   const tenant = await getTenantBookingConfig(appointment.tenantId);
+
+  if (appointment.status === 'cancelled') {
+    // A webhook reporting success for an appointment that's already
+    // cancelled (by the block below, or by the stale-payment sweep) means
+    // the charge went through anyway - flag it regardless of why it was
+    // cancelled, rather than only for the slot-conflict case.
+    await flagUnhonorableDeposit(appointment, tenant);
+    return { appointment, confirmed: false };
+  }
+
+  if (appointment.status !== 'pending_payment') return null; // some other status - nothing this function should touch
 
   try {
     await assertNoConflict({
@@ -375,37 +434,28 @@ export async function confirmPendingPaymentAppointment(appointmentId) {
   } catch (err) {
     if (!isDuplicateSlotError(err) && !(err instanceof ApiError && err.code === 'SLOT_CONFLICT')) throw err;
 
-    // A paid deposit that can't be honored is a real money problem, not a
-    // routine booking conflict - loud on purpose (console.error alone isn't
-    // reliably monitored; this needs a human to see it and issue a refund
-    // through Yoco directly, since this codebase has no refund API call).
-    console.error(
-      `[appointmentService] Deposit paid but slot ${appointment._id} was taken by someone else before confirmation - needs a manual refund.`
-    );
-    Sentry.captureMessage('Paid deposit could not be honored - slot taken before confirmation, manual refund needed', {
-      level: 'error',
-      extra: { appointmentId: String(appointment._id), tenantId: String(appointment.tenantId) },
-    });
-
     appointment.status = 'cancelled';
     appointment.cancelledAt = new Date();
-    appointment.cancelledReason = 'This slot was taken by someone else before your deposit was confirmed.';
+    appointment.cancelledReason = SLOT_TAKEN_CANCEL_REASON;
     await appointment.save();
 
-    await logAudit({
-      actorType: 'superadmin', // no logged-in user/customer - the Yoco webhook triggered this, same convention as billingService.js's ITN handling
-      action: 'appointment.deposit_conflict_cancelled',
-      entityType: 'Appointment',
-      entityId: appointment._id,
-      diff: { after: { status: 'cancelled', reason: appointment.cancelledReason } },
-    });
-
-    await sendDepositConflictNotice({ tenant, customer: appointment.customerId }).catch((notifyErr) => {
-      console.error(`[appointmentService] deposit conflict notice failed: ${notifyErr.message}`);
-    });
-
+    await flagUnhonorableDeposit(appointment, tenant);
     return { appointment, confirmed: false };
   }
+
+  // Won the slot - anyone else still holding a pending_payment appointment
+  // for this exact same staff+time never had a chance and should stop
+  // lingering, rather than only being discovered as a conflict if/when
+  // their own deposit happens to land too.
+  await Appointment.updateMany(
+    {
+      _id: { $ne: appointment._id },
+      staffMemberId: appointment.staffMemberId._id,
+      startTime: appointment.startTime,
+      status: 'pending_payment',
+    },
+    { status: 'cancelled', cancelledAt: new Date(), cancelledReason: SLOT_TAKEN_CANCEL_REASON }
+  );
 
   const manageUrl = buildManageUrl({ tenant, appointment });
   await sendBookingConfirmation({

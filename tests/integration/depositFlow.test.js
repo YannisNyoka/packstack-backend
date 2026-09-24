@@ -227,21 +227,41 @@ describe('deposit checkout flow', () => {
   });
 
   describe('POST /public/deposit-webhook', () => {
-    async function createPendingCheckout() {
+    async function createPendingCheckout({
+      startTime = futureStart(),
+      checkoutId = 'ch_webhook_test',
+      phone = '+27821112222',
+      name = 'Deposit Client',
+    } = {}) {
       fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
         ok: true,
-        json: async () => ({ id: 'ch_webhook_test', redirectUrl: 'https://pay.yoco.com/ch_webhook_test', status: 'created' }),
+        json: async () => ({ id: checkoutId, redirectUrl: `https://pay.yoco.com/${checkoutId}`, status: 'created' }),
       });
       const res = await request(app)
         .post(`/api/t/${slug}/public/appointments/checkout`)
         .send({
           staffMemberId: String(seed.staff._id),
           serviceIds: [String(seed.service._id)],
-          startTime: futureStart(),
-          customerDetails: { phone: '+27821112222', name: 'Deposit Client' },
+          startTime,
+          customerDetails: { phone, name },
         });
       fetchSpy.mockRestore();
       return res.body.appointmentId;
+    }
+
+    function webhookRequest({ checkoutId = 'ch_webhook_test', webhookId }) {
+      const rawBody = JSON.stringify({
+        type: 'payment.succeeded',
+        payload: { metadata: { checkoutId } },
+      });
+      const webhookTimestamp = String(Math.floor(Date.now() / 1000));
+      return request(app)
+        .post(`/api/t/${slug}/public/deposit-webhook`)
+        .set('webhook-id', webhookId)
+        .set('webhook-timestamp', webhookTimestamp)
+        .set('webhook-signature', signWebhook({ webhookId, webhookTimestamp, rawBody }))
+        .set('Content-Type', 'application/json')
+        .send(rawBody);
     }
 
     it('confirms the appointment and marks the payment succeeded on a valid payment.succeeded webhook', async () => {
@@ -384,6 +404,60 @@ describe('deposit checkout flow', () => {
       // the Payment record must keep reflecting what Yoco actually reported.
       const payment = await runWithTenant(tenant._id, async () => Payment.findOne({ appointmentId }));
       expect(payment.status).toBe('succeeded');
+    });
+
+    it('cancels every other pending_payment hold on the same slot the moment one deposit confirms it', async () => {
+      await connectYoco(accessToken);
+      await requireDeposit(accessToken, 100);
+
+      const startTime = futureStart();
+      const winnerId = await createPendingCheckout({ startTime, checkoutId: 'ch_winner', phone: '+27821110001', name: 'Winner' });
+      const loserAId = await createPendingCheckout({ startTime, checkoutId: 'ch_loser_a', phone: '+27821110002', name: 'Loser A' });
+      const loserBId = await createPendingCheckout({ startTime, checkoutId: 'ch_loser_b', phone: '+27821110003', name: 'Loser B' });
+
+      const res = await webhookRequest({ checkoutId: 'ch_winner', webhookId: 'msg_winner' });
+      expect(res.status).toBe(200);
+
+      const [winner, loserA, loserB] = await runWithTenant(tenant._id, async () =>
+        Promise.all([Appointment.findById(winnerId), Appointment.findById(loserAId), Appointment.findById(loserBId)])
+      );
+      expect(winner.status).toBe('booked');
+      expect(loserA.status).toBe('cancelled');
+      expect(loserA.cancelledReason).toMatch(/taken by someone else/i);
+      expect(loserB.status).toBe('cancelled');
+      expect(loserB.cancelledReason).toMatch(/taken by someone else/i);
+
+      // Neither loser had actually paid - their Payments stay 'pending',
+      // not flagged for a refund that was never owed.
+      const [paymentA, paymentB] = await runWithTenant(tenant._id, async () =>
+        Promise.all([Payment.findOne({ appointmentId: loserAId }), Payment.findOne({ appointmentId: loserBId })])
+      );
+      expect(paymentA.status).toBe('pending');
+      expect(paymentB.status).toBe('pending');
+    });
+
+    it('still flags a refund if a proactively-cancelled sibling turns out to have paid anyway', async () => {
+      await connectYoco(accessToken);
+      await requireDeposit(accessToken, 100);
+
+      const startTime = futureStart();
+      await createPendingCheckout({ startTime, checkoutId: 'ch_winner2', phone: '+27821110004', name: 'Winner' });
+      const loserId = await createPendingCheckout({ startTime, checkoutId: 'ch_loser2', phone: '+27821110005', name: 'Slow Payer' });
+
+      // Winner's deposit confirms first, proactively cancelling the loser's
+      // still-unpaid hold (previous test covers that part).
+      await webhookRequest({ checkoutId: 'ch_winner2', webhookId: 'msg_winner2' });
+
+      // The slow payer's card only clears now, after their appointment was
+      // already cancelled - the charge is real; it must not vanish silently.
+      const res = await webhookRequest({ checkoutId: 'ch_loser2', webhookId: 'msg_loser2' });
+      expect(res.status).toBe(200);
+
+      const loser = await runWithTenant(tenant._id, async () => Appointment.findById(loserId));
+      expect(loser.status).toBe('cancelled');
+
+      const payment = await runWithTenant(tenant._id, async () => Payment.findOne({ appointmentId: loserId }));
+      expect(payment.status).toBe('succeeded'); // Yoco really did charge this card - must still read as succeeded, not lost
     });
   });
 
