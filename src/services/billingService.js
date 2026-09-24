@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon';
+import mongoose from 'mongoose';
 import { Subscription } from '../models/Subscription.js';
 import { Plan } from '../models/Plan.js';
 import { Tenant } from '../models/Tenant.js';
@@ -14,6 +15,20 @@ import {
   cancelPayfastSubscription,
 } from '../lib/providers/payfastClient.js';
 import { env } from '../config/env.js';
+
+// Best-effort, never blocks the caller's own transition - see both call
+// sites below (expirePastDueSubscriptions and handlePayfastItn's amount-
+// mismatch correction doesn't call this, only actual suspension does).
+// Skipped in tests for the same reason cancelSubscription() skips it: no
+// real PayFast sandbox to call from there.
+async function tryCancelPayfastSubscription(token, context) {
+  if (!token || env.NODE_ENV === 'test') return;
+  try {
+    await cancelPayfastSubscription(token);
+  } catch (err) {
+    console.error(`[billingService] Failed to cancel PayFast subscription during ${context}: ${err.message}`);
+  }
+}
 
 const GRACE_PERIOD_DAYS = 7;
 // PayFast's subscription "frequency" codes: 3 = monthly, 6 = annual.
@@ -179,63 +194,129 @@ export async function handlePayfastItn({ orderedFields, rawBody }) {
   const tenant = await Tenant.findById(tenantId).lean();
   if (!tenant) throw ApiError.notFound('Tenant not found for this ITN');
 
-  await runWithTenant(tenantId, async () => {
-    const subscription = await Subscription.findOne({}).populate('planId');
-    if (!subscription || String(subscription._id) !== String(fieldsObj.m_payment_id)) {
-      throw ApiError.notFound('No matching subscription for this ITN');
+  // Concurrent ITN deliveries for the same tenant are a real, documented
+  // PayFast behavior (retries can arrive close together, sometimes from
+  // different source IPs) - optimisticConcurrency on Subscription (see the
+  // model) turns a lost-update race into a VersionError on save() instead of
+  // one delivery silently clobbering the other's transition. Retry the
+  // whole read-modify-write a few times rather than surfacing that to
+  // PayFast as a failure, which would just trigger yet another redelivery.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const applied = await runWithTenant(tenantId, () => applyPayfastItn({ tenantId, fieldsObj }));
+      if (!applied) break; // duplicate delivery - already processed, nothing to do
+      break;
+    } catch (err) {
+      const isVersionConflict = err instanceof mongoose.Error.VersionError;
+      if (!isVersionConflict || attempt === MAX_ATTEMPTS) throw err;
+      console.error(`[billingService] ITN save conflict for tenant ${tenantId}, retrying (attempt ${attempt}/${MAX_ATTEMPTS})`);
     }
-
-    // PayFast returns a token as soon as a card is authorized, even for the
-    // R0 trial-authorization transaction createCheckoutForPlan sends for a
-    // fresh signup (no real debit yet) - capture it unconditionally so
-    // cancelSubscription() below has something to cancel against before any
-    // money has actually moved.
-    if (fieldsObj.token) subscription.billingProviderSubscriptionToken = fieldsObj.token;
-    if (fieldsObj.pf_payment_id) subscription.billingProviderCustomerId = fieldsObj.pf_payment_id;
-
-    // Subscription.status is the billing source of truth; Tenant.status is
-    // the denormalized copy middleware/tenantResolution.js and
-    // services/domainService.js actually gate on (they run before/without a
-    // bound tenant context in some cases, so they can't join through
-    // Subscription). Every transition below keeps both in sync.
-    const paymentStatus = fieldsObj.payment_status;
-    const amountGross = Number(fieldsObj.amount_gross || 0);
-
-    if (paymentStatus === 'COMPLETE' && amountGross > 0) {
-      subscription.status = 'active';
-      subscription.currentPeriodEnd = computePeriodEnd(subscription.planId);
-      subscription.gracePeriodEndsAt = null;
-      await Tenant.findByIdAndUpdate(tenantId, { status: 'active' });
-      clearTenantCache(); // tenantResolution.js's slug cache would otherwise keep serving the pre-reactivation status for up to a minute
-    } else if (paymentStatus === 'FAILED' && subscription.status === 'active') {
-      subscription.status = 'past_due';
-      subscription.gracePeriodEndsAt = DateTime.now().plus({ days: GRACE_PERIOD_DAYS }).toJSDate();
-      await Tenant.findByIdAndUpdate(tenantId, { status: 'past_due' });
-      clearTenantCache();
-    } else if (paymentStatus === 'FAILED' && subscription.status === 'trialing') {
-      // The deferred trial-end debit itself failed (e.g. card declined) -
-      // there's no prior active period to grace-period from, so suspend
-      // straight away rather than leaving the tenant on a subscription that
-      // will never successfully bill.
-      subscription.status = 'suspended';
-      await Tenant.findByIdAndUpdate(tenantId, { status: 'suspended' });
-      clearTenantCache();
-    }
-    // 'PENDING', a R0 authorization COMPLETE (amountGross === 0), and
-    // anything else: no status transition yet - token capture above already ran.
-
-    await subscription.save();
-
-    await logAudit({
-      actorType: 'superadmin', // no logged-in user - PayFast itself triggered this
-      action: 'billing.itn_processed',
-      entityType: 'Subscription',
-      entityId: subscription._id,
-      diff: { after: { status: subscription.status, paymentStatus } },
-    });
-  });
+  }
 
   return { received: true };
+}
+
+/**
+ * The actual read-modify-write for a single ITN delivery, split out so
+ * handlePayfastItn above can retry it whole on a version conflict. Returns
+ * false if this exact pf_payment_id was already applied (a PayFast
+ * redelivery) - the whole transition is skipped rather than reapplied, so a
+ * duplicate delivery can never push currentPeriodEnd/gracePeriodEndsAt out
+ * a second time or resurrect a since-cancelled/suspended subscription.
+ */
+async function applyPayfastItn({ tenantId, fieldsObj }) {
+  const subscription = await Subscription.findOne({}).populate('planId');
+  if (!subscription || String(subscription._id) !== String(fieldsObj.m_payment_id)) {
+    throw ApiError.notFound('No matching subscription for this ITN');
+  }
+
+  if (fieldsObj.pf_payment_id && fieldsObj.pf_payment_id === subscription.lastProcessedPfPaymentId) {
+    console.error(`[billingService] Skipping duplicate PayFast ITN redelivery for subscription ${subscription._id} (pf_payment_id ${fieldsObj.pf_payment_id})`);
+    return false;
+  }
+
+  // PayFast returns a token as soon as a card is authorized, even for the
+  // R0 trial-authorization transaction createCheckoutForPlan sends for a
+  // fresh signup (no real debit yet) - capture it unconditionally so
+  // cancelSubscription() below has something to cancel against before any
+  // money has actually moved.
+  if (fieldsObj.token) subscription.billingProviderSubscriptionToken = fieldsObj.token;
+  if (fieldsObj.pf_payment_id) {
+    subscription.billingProviderCustomerId = fieldsObj.pf_payment_id;
+    subscription.lastProcessedPfPaymentId = fieldsObj.pf_payment_id;
+  }
+
+  // Subscription.status is the billing source of truth; Tenant.status is
+  // the denormalized copy middleware/tenantResolution.js and
+  // services/domainService.js actually gate on (they run before/without a
+  // bound tenant context in some cases, so they can't join through
+  // Subscription). Every transition below keeps both in sync.
+  const paymentStatus = fieldsObj.payment_status;
+  const amountGross = Number(fieldsObj.amount_gross || 0);
+
+  if (paymentStatus === 'COMPLETE' && amountGross > 0) {
+    // subscription.planId can have been reassigned by a later checkout
+    // attempt (createCheckoutForPlan mutates the tenant's one Subscription
+    // doc immediately, before payment) between when THIS checkout was
+    // created and when its ITN lands - every checkout shares the same
+    // m_payment_id (the subscription's own _id), so PayFast gives us no way
+    // to tell attempts apart. Reconcile against what was actually paid: if
+    // the amount doesn't match the plan currently on the subscription,
+    // correct planId to whichever active plan really costs this amount
+    // before activating, so the tenant ends up provisioned at the plan they
+    // actually paid for rather than whatever they last clicked.
+    let effectivePlan = subscription.planId; // populated Plan doc
+    if (Math.abs(amountGross - effectivePlan.priceZAR) > 0.01) {
+      const actualPlan = await Plan.findOne({ priceZAR: amountGross, active: true });
+      if (actualPlan) {
+        console.error(
+          `[billingService] ITN amount ${amountGross} for subscription ${subscription._id} doesn't match its current plan ` +
+            `${effectivePlan.key} (${effectivePlan.priceZAR}) - correcting to ${actualPlan.key}, the plan that actually costs this amount.`
+        );
+        subscription.planId = actualPlan._id; // persisted as a bare ref - fine, Mongoose only needs the id to save
+        effectivePlan = actualPlan; // keep using the real (populated) doc below, not the now-unpopulated ref
+      } else {
+        console.error(
+          `[billingService] ITN amount ${amountGross} for subscription ${subscription._id} doesn't match its current plan ` +
+            `${effectivePlan.key} (${effectivePlan.priceZAR}) and no active plan costs this amount either - activating as-is.`
+        );
+      }
+    }
+
+    subscription.status = 'active';
+    subscription.currentPeriodEnd = computePeriodEnd(effectivePlan);
+    subscription.gracePeriodEndsAt = null;
+    await Tenant.findByIdAndUpdate(tenantId, { status: 'active' });
+    clearTenantCache(); // tenantResolution.js's slug cache would otherwise keep serving the pre-reactivation status for up to a minute
+  } else if (paymentStatus === 'FAILED' && subscription.status === 'active') {
+    subscription.status = 'past_due';
+    subscription.gracePeriodEndsAt = DateTime.now().plus({ days: GRACE_PERIOD_DAYS }).toJSDate();
+    await Tenant.findByIdAndUpdate(tenantId, { status: 'past_due' });
+    clearTenantCache();
+  } else if (paymentStatus === 'FAILED' && subscription.status === 'trialing') {
+    // The deferred trial-end debit itself failed (e.g. card declined) -
+    // there's no prior active period to grace-period from, so suspend
+    // straight away rather than leaving the tenant on a subscription that
+    // will never successfully bill.
+    subscription.status = 'suspended';
+    await Tenant.findByIdAndUpdate(tenantId, { status: 'suspended' });
+    clearTenantCache();
+  }
+  // 'PENDING', a R0 authorization COMPLETE (amountGross === 0), and
+  // anything else: no status transition yet - token capture above already ran.
+
+  await subscription.save();
+
+  await logAudit({
+    actorType: 'superadmin', // no logged-in user - PayFast itself triggered this
+    action: 'billing.itn_processed',
+    entityType: 'Subscription',
+    entityId: subscription._id,
+    diff: { after: { status: subscription.status, paymentStatus } },
+  });
+
+  return true;
 }
 
 /**
@@ -305,6 +386,17 @@ export async function expirePastDueSubscriptions() {
       await Tenant.findByIdAndUpdate(tenant._id, { status: 'suspended' });
       clearTenantCache();
       suspendedCount += 1;
+
+      // Without this, PayFast's recurring profile (cycles: '0', indefinite -
+      // see createCheckoutForPlan) keeps running server-side after a local
+      // suspension: weeks later the same card could succeed on PayFast's own
+      // retry schedule and silently reactivate + recharge a tenant who was
+      // suspended for non-payment and never took any action to resubscribe.
+      // Same call cancelSubscription() (the owner-initiated path) already
+      // makes. Best-effort via tryCancelPayfastSubscription above - a
+      // PayFast-side failure (including "already cancelled") is logged, not
+      // thrown, so it never blocks the local suspension this sweep exists for.
+      await tryCancelPayfastSubscription(subscription.billingProviderSubscriptionToken, 'auto-suspend for non-payment');
 
       await logAudit({
         actorType: 'superadmin',

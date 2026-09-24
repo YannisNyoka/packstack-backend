@@ -307,6 +307,60 @@ describe('PayFast subscription billing', () => {
       const subscription = await runWithTenant(tenant._id, async () => await Subscription.findOne({}));
       expect(subscription.status).toBe('trialing');
     });
+
+    it('ignores a redelivered ITN with the same pf_payment_id instead of reapplying it', async () => {
+      const { fields } = await checkout();
+      const body = buildItnBody({
+        custom_str1: fields.custom_str1,
+        m_payment_id: fields.m_payment_id,
+        pf_payment_id: 'pf-redelivered-1',
+        payment_status: 'COMPLETE',
+        amount_gross: '499.00',
+        token: 'pf-subscription-token-abc',
+      });
+
+      const first = await request(app).post('/api/platform/billing/payfast/itn').set('Content-Type', 'application/x-www-form-urlencoded').send(body);
+      expect(first.status).toBe(200);
+      const afterFirst = await runWithTenant(tenant._id, async () => await Subscription.findOne({}));
+      const firstPeriodEnd = afterFirst.currentPeriodEnd.getTime();
+
+      // PayFast redelivers the exact same notification (their documented
+      // retry behavior) - must be a clean no-op, not a second period extension.
+      const second = await request(app).post('/api/platform/billing/payfast/itn').set('Content-Type', 'application/x-www-form-urlencoded').send(body);
+      expect(second.status).toBe(200);
+
+      const afterSecond = await runWithTenant(tenant._id, async () => await Subscription.findOne({}));
+      expect(afterSecond.currentPeriodEnd.getTime()).toBe(firstPeriodEnd);
+    });
+
+    it('self-heals planId when the ITN amount matches a different active plan than the one currently on the subscription', async () => {
+      const proPlan = await createPlan(superAdminToken, { key: 'pro', priceZAR: 999 });
+      const { fields } = await checkout(); // checked out for `plan` (starter, 499)
+
+      // Simulate the plan-switch race the reconciliation exists for: a
+      // second checkout attempt (sharing the same m_payment_id) reassigned
+      // planId to Pro before this ITN, for the original Starter checkout, arrives.
+      await runWithTenant(tenant._id, async () => {
+        const subscription = await Subscription.findOne({});
+        subscription.planId = proPlan._id;
+        await subscription.save();
+      });
+
+      const body = buildItnBody({
+        custom_str1: fields.custom_str1,
+        m_payment_id: fields.m_payment_id,
+        pf_payment_id: 'pf-mismatch-1',
+        payment_status: 'COMPLETE',
+        amount_gross: '499.00', // what was actually charged: Starter's price
+        token: 'pf-subscription-token-abc',
+      });
+      const res = await request(app).post('/api/platform/billing/payfast/itn').set('Content-Type', 'application/x-www-form-urlencoded').send(body);
+      expect(res.status).toBe(200);
+
+      const subscription = await runWithTenant(tenant._id, async () => await Subscription.findOne({}).populate('planId'));
+      expect(subscription.status).toBe('active');
+      expect(subscription.planId.key).toBe('starter'); // corrected back to what was actually paid for
+    });
   });
 
   describe('POST /billing/cancel', () => {
@@ -348,6 +402,28 @@ describe('PayFast subscription billing', () => {
   });
 
   describe('expirePastDueSubscriptions sweep', () => {
+    // tryCancelPayfastSubscription() skips the real PayFast call under
+    // NODE_ENV=test (same convention as POST /billing/cancel's own tests
+    // above) - this only exercises that the sweep still completes cleanly
+    // with a token present, not the network call itself.
+    it('suspends a past_due subscription with a PayFast token on file', async () => {
+      await request(app).post(`/api/t/${slug}/billing/checkout`).set('Authorization', `Bearer ${ownerToken}`).send({ planId: plan._id });
+
+      await runWithTenant(tenant._id, async () => {
+        const subscription = await Subscription.findOne({});
+        subscription.status = 'past_due';
+        subscription.gracePeriodEndsAt = new Date(Date.now() - 1000); // already expired
+        subscription.billingProviderSubscriptionToken = 'pf-subscription-token-abc';
+        await subscription.save();
+      });
+
+      const result = await expirePastDueSubscriptions();
+      expect(result.suspendedCount).toBe(1);
+
+      const subscription = await runWithTenant(tenant._id, async () => await Subscription.findOne({}));
+      expect(subscription.status).toBe('suspended');
+    });
+
     it('suspends only past_due subscriptions whose grace period has expired', async () => {
       await request(app).post(`/api/t/${slug}/billing/checkout`).set('Authorization', `Bearer ${ownerToken}`).send({ planId: plan._id });
 

@@ -18,8 +18,17 @@ const subscriptionSchema = new Schema(
     currentPeriodEnd: { type: Date, default: null },
     cancelAtPeriodEnd: { type: Boolean, default: false },
     gracePeriodEndsAt: { type: Date, default: null },
+    // The PayFast pf_payment_id most recently applied by handlePayfastItn -
+    // PayFast can and does redeliver the same ITN (their documented retry
+    // behavior on an ambiguous response), and without this a redelivery of
+    // an already-applied COMPLETE/FAILED notification would reprocess as if
+    // it were new: pushing currentPeriodEnd or gracePeriodEndsAt out again
+    // from the redelivery's own "now" with no corresponding second charge.
+    // Comparing against this field before transitioning makes a true replay
+    // a clean no-op. See billingService.js#handlePayfastItn.
+    lastProcessedPfPaymentId: { type: String, default: null },
   },
-  { timestamps: true }
+  { timestamps: true, optimisticConcurrency: true }
 );
 
 subscriptionSchema.plugin(tenantScopePlugin, { uniquePerTenant: true });
