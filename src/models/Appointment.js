@@ -50,7 +50,20 @@ const appointmentSchema = new Schema(
 );
 
 appointmentSchema.plugin(tenantScopePlugin);
-appointmentSchema.index({ tenantId: 1, staffMemberId: 1, startTime: 1 });
+// Unique + partial rather than a plain index: closes the TOCTOU gap between
+// appointmentService.js's assertNoConflict() pre-check and the actual
+// create/save - two requests racing for the exact same staff+start (the
+// common case, since slots are generated on a fixed grid) can both pass the
+// pre-check, but only one can win this constraint; the loser gets a Mongo
+// duplicate-key error, which createAppointment/rescheduleAppointment catch
+// and turn into the same friendly SLOT_CONFLICT response the pre-check
+// itself returns. Scoped to OPEN_STATUSES (mirrored here, not imported, to
+// avoid a model->service dependency) - a cancelled/completed/no_show
+// appointment must never block a new booking at the same time.
+appointmentSchema.index(
+  { tenantId: 1, staffMemberId: 1, startTime: 1 },
+  { unique: true, partialFilterExpression: { status: { $in: ['pending_payment', 'booked', 'confirmed'] } } }
+);
 appointmentSchema.index({ tenantId: 1, customerId: 1, startTime: -1 });
 appointmentSchema.index({ tenantId: 1, status: 1, startTime: 1 });
 appointmentSchema.index({ tenantId: 1, reminderSentAt: 1, startTime: 1 });

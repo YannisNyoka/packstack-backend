@@ -87,6 +87,25 @@ async function assertNoConflict({ staffMemberId, startTime, endTime, excludeAppo
   }
 }
 
+const SLOT_CONFLICT_ERROR = () =>
+  ApiError.conflict('This time slot is no longer available for the selected staff member.', { code: 'SLOT_CONFLICT' });
+
+/**
+ * The check above and this Mongo-level constraint (see Appointment's unique
+ * partial index) are two layers of the same guarantee, not redundant: the
+ * check above is a best-effort pre-flight that gives a fast, friendly error
+ * in the overwhelmingly common case, but leaves a real gap between the
+ * check and the write two requests can both pass for the exact same
+ * staff+start (the common race, since slots sit on a fixed grid). Only the
+ * unique index actually closes that gap - the loser's write throws a Mongo
+ * duplicate-key error (code 11000), which this turns into the same
+ * SLOT_CONFLICT response the pre-flight check itself returns, so the
+ * caller/frontend never has to know which layer caught it.
+ */
+function isDuplicateSlotError(err) {
+  return err?.code === 11000;
+}
+
 async function computeServiceSummary(serviceIds) {
   if (!serviceIds?.length) throw ApiError.badRequest('At least one service must be selected');
   const services = await Service.find({ _id: { $in: serviceIds }, active: true });
@@ -271,17 +290,23 @@ export async function createAppointment({
     throw ApiError.badRequest('customerId or customerDetails.phone is required');
   }
 
-  const appointment = await Appointment.create({
-    customerId: customer._id,
-    staffMemberId,
-    serviceIds,
-    startTime: start,
-    endTime: end,
-    priceSnapshot: price,
-    notes: notes || '',
-    createdByUserId: actorUserId,
-    status: initialStatus,
-  });
+  let appointment;
+  try {
+    appointment = await Appointment.create({
+      customerId: customer._id,
+      staffMemberId,
+      serviceIds,
+      startTime: start,
+      endTime: end,
+      priceSnapshot: price,
+      notes: notes || '',
+      createdByUserId: actorUserId,
+      status: initialStatus,
+    });
+  } catch (err) {
+    if (isDuplicateSlotError(err)) throw SLOT_CONFLICT_ERROR();
+    throw err;
+  }
 
   await logAudit({
     req,
@@ -396,7 +421,12 @@ export async function rescheduleAppointment({
   appointment.rescheduleHistory.push({ from: previousStart, to: newStart, changedBy: actorUserId });
   appointment.startTime = newStart;
   appointment.endTime = newEnd;
-  await appointment.save();
+  try {
+    await appointment.save();
+  } catch (err) {
+    if (isDuplicateSlotError(err)) throw SLOT_CONFLICT_ERROR();
+    throw err;
+  }
 
   await logAudit({
     req,
