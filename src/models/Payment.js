@@ -9,7 +9,7 @@ const paymentSchema = new Schema(
     amount: { type: Number, required: true, min: 0 },
     method: { type: String, enum: ['cash', 'card', 'online'], required: true },
     provider: { type: String, enum: ['cash', 'yoco', 'manual'], required: true },
-    providerTransactionId: { type: String, default: null },
+    providerTransactionId: { type: String, default: null, index: true },
     status: { type: String, enum: ['pending', 'succeeded', 'failed', 'refunded'], default: 'pending' },
     recordedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
