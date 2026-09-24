@@ -34,12 +34,13 @@ export async function getDepositConfig(tenantId) {
 }
 
 /**
- * Holds the slot (a 'pending_payment' appointment - see
- * appointmentService.createAppointment) and starts a Yoco hosted checkout
- * for the deposit. The appointment isn't confirmed and no notification goes
- * out until handleYocoWebhook below hears back that the deposit succeeded -
- * see architecture doc §7's original deferral of this and the NXL feature
- * audit that prompted building it for real.
+ * Creates a 'pending_payment' appointment (see
+ * appointmentService.createAppointment - deliberately does NOT hold the
+ * slot, so another customer can still book/pay for it too) and starts a
+ * Yoco hosted checkout for the deposit. The appointment isn't confirmed and
+ * no notification goes out until handleYocoWebhook below hears back that
+ * the deposit succeeded - see architecture doc §7's original deferral of
+ * this and the NXL feature audit that prompted building it for real.
  */
 export async function createDepositCheckout({ req, tenantId, tenantSlug, data }) {
   const { required, amountZAR } = await getDepositConfig(tenantId);
@@ -140,13 +141,16 @@ export async function handleYocoWebhook({ headers, rawBody }) {
 }
 
 /**
- * Reclaims slots held by abandoned deposit checkouts - a customer who closes
- * the Yoco tab, a declined card with no webhook this handler recognizes, or
- * any other way a 'pending_payment' appointment never resolves on its own.
- * Meant to run frequently (every few minutes, not daily like
- * billingService.expirePastDueSubscriptions - an abandoned checkout should
- * free the slot quickly, not sit on it for a day) via an external scheduler;
- * see jobs/expireStalePendingPayments.js.
+ * Cleans up abandoned deposit checkouts - a customer who closes the Yoco
+ * tab, a declined card with no webhook this handler recognizes, or any
+ * other way a 'pending_payment' appointment never resolves on its own.
+ * Doesn't free a slot (pending_payment never held one - see
+ * SLOT_BLOCKING_STATUSES in appointmentService.js) - this is data hygiene:
+ * without it, an abandoned checkout would sit forever as a phantom
+ * appointment cluttering the dashboard and the customer's own upcoming-
+ * appointments view. Meant to run frequently (every few minutes, not daily
+ * like billingService.expirePastDueSubscriptions) via an external
+ * scheduler; see jobs/expireStalePendingPayments.js.
  */
 export async function releaseStalePendingPayments() {
   const cutoff = new Date(Date.now() - PENDING_PAYMENT_TIMEOUT_MINUTES * 60_000);

@@ -107,6 +107,27 @@ export async function sendStaffInviteEmail({ tenant, email, name, inviteUrl }) {
 }
 
 /**
+ * Fires when a deposit succeeded but appointmentService.js's
+ * confirmPendingPaymentAppointment couldn't honor the slot - it was taken
+ * by someone else while this payment was in flight (pending_payment
+ * appointments never block the slot - see SLOT_BLOCKING_STATUSES). The
+ * customer's money is real and already moved; this codebase has no refund
+ * API integration, so the business needs to issue it manually via Yoco -
+ * this at least makes sure the customer isn't left wondering what happened.
+ * Same best-effort, never-throws contract as sendBookingConfirmation.
+ */
+export async function sendDepositConflictNotice({ tenant, customer }) {
+  const message =
+    `Hi ${customer.name}, we're sorry - the time slot you paid a deposit for at ${tenant.displayName} was booked by ` +
+    `someone else just before your payment was confirmed. Your deposit will be refunded; please contact us if you don't see it soon.`;
+
+  await Promise.all([
+    sendViaWhatsApp({ customer, message }),
+    sendViaEmail({ tenant, to: customer.email, subject: `About your deposit - ${tenant.displayName}`, message }),
+  ]);
+}
+
+/**
  * Same best-effort, never-throws contract as sendBookingConfirmation - fired
  * by services/reminderService.js roughly 24h ahead of the appointment.
  */

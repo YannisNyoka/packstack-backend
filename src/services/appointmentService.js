@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon';
+import * as Sentry from '@sentry/node';
 import { Appointment } from '../models/Appointment.js';
 import { Service } from '../models/Service.js';
 import { StaffMember } from '../models/StaffMember.js';
@@ -9,14 +10,21 @@ import { isSameDayCutoffPassed, isWithinChangeWindow } from '../lib/bookingRules
 import { findOrCreateByPhone, getCustomerById } from './customerService.js';
 import { getTimeOffRangesByStaff } from './staffTimeOffService.js';
 import { earnPointsForCompletedAppointment } from './loyaltyService.js';
-import { sendBookingConfirmation } from './notificationService.js';
+import { sendBookingConfirmation, sendDepositConflictNotice } from './notificationService.js';
 import { signAppointmentManageToken, verifyAppointmentManageToken } from '../lib/jwt.js';
 import { env } from '../config/env.js';
 
-// 'pending_payment' occupies a slot exactly like a real booking (a deposit
-// checkout in flight must not be double-booked out from under the customer
-// who's mid-payment), even though it isn't confirmed yet.
-const OPEN_STATUSES = ['pending_payment', 'booked', 'confirmed'];
+// Deliberately does NOT include 'pending_payment': a deposit checkout in
+// flight must never block the slot for anyone else - a customer who starts
+// paying and abandons it (closes the tab, declined card, or just never
+// finishes) must not be able to sit on a slot other customers can see and
+// want. Multiple customers can therefore hold simultaneous pending_payment
+// appointments for the very same slot; only one of them can actually win it
+// once a deposit lands - see confirmPendingPaymentAppointment below, which
+// re-checks this same list at confirmation time (the moment that actually
+// matters) rather than relying on a reservation made before payment even
+// started.
+const SLOT_BLOCKING_STATUSES = ['booked', 'confirmed'];
 const FINAL_STATUSES = ['cancelled', 'completed', 'no_show'];
 
 // Candidate slot start times are generated on this grid within each working-hours
@@ -73,7 +81,7 @@ async function getTenantBookingConfig(tenantId) {
 async function assertNoConflict({ staffMemberId, startTime, endTime, excludeAppointmentId }) {
   const conflictFilter = {
     staffMemberId,
-    status: { $in: OPEN_STATUSES },
+    status: { $in: SLOT_BLOCKING_STATUSES },
     startTime: { $lt: endTime },
     endTime: { $gt: startTime },
   };
@@ -158,7 +166,7 @@ export async function getAvailability({ tenantId, date, serviceIds, staffMemberI
 
   const dayAppointments = await Appointment.find({
     staffMemberId: { $in: staffMembers.map((s) => s._id) },
-    status: { $in: OPEN_STATUSES },
+    status: { $in: SLOT_BLOCKING_STATUSES },
     startTime: { $lt: dayEnd.toJSDate() },
     endTime: { $gt: dayStart.toJSDate() },
   });
@@ -237,10 +245,13 @@ export async function getAppointmentById(id) {
  */
 /**
  * initialStatus/sendConfirmation exist for services/depositService.js: a
- * deposit-gated booking is created as 'pending_payment' (holds the slot,
- * nothing sent yet) and only becomes a real, confirmed booking - at which
- * point the normal confirmation notification goes out - once Yoco's webhook
- * confirms the deposit landed. Every other caller keeps today's behavior.
+ * deposit-gated booking is created as 'pending_payment' (does NOT hold the
+ * slot - see SLOT_BLOCKING_STATUSES above - nothing sent yet) and only
+ * becomes a real, confirmed booking - at which point the normal confirmation
+ * notification goes out - once Yoco's webhook confirms the deposit landed
+ * AND the slot is re-checked as still free; see
+ * confirmPendingPaymentAppointment below. Every other caller keeps today's
+ * behavior.
  */
 export async function createAppointment({
   req,
@@ -334,16 +345,68 @@ export async function createAppointment({
  * a real booking once its deposit has actually landed, and sends the
  * confirmation that was deliberately withheld at creation time. Called from
  * services/depositService.js's webhook handler, never directly from a route.
+ *
+ * Since a pending_payment appointment never held the slot (see
+ * SLOT_BLOCKING_STATUSES above), someone else can have booked/confirmed the
+ * exact same slot while this deposit was in flight - the money has already
+ * moved by the time this runs (Yoco already reported success), so this is
+ * the one place that race can actually surface. Re-checks for a conflict
+ * right here, at the only point it actually matters, rather than trusting a
+ * reservation made before payment even started. A real conflict cancels
+ * this appointment instead of confirming it and reports which happened, so
+ * the caller (depositService.js) can tell the customer their money is safe
+ * but the slot is gone rather than silently double-booking or going quiet.
  */
 export async function confirmPendingPaymentAppointment(appointmentId) {
   const appointment = await Appointment.findOne({ _id: appointmentId, status: 'pending_payment' })
     .populate('customerId staffMemberId serviceIds');
   if (!appointment) return null; // already confirmed/cancelled, or webhook arrived twice - not an error
 
-  appointment.status = 'booked';
-  await appointment.save();
-
   const tenant = await getTenantBookingConfig(appointment.tenantId);
+
+  try {
+    await assertNoConflict({
+      staffMemberId: appointment.staffMemberId._id,
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+    });
+    appointment.status = 'booked';
+    await appointment.save();
+  } catch (err) {
+    if (!isDuplicateSlotError(err) && !(err instanceof ApiError && err.code === 'SLOT_CONFLICT')) throw err;
+
+    // A paid deposit that can't be honored is a real money problem, not a
+    // routine booking conflict - loud on purpose (console.error alone isn't
+    // reliably monitored; this needs a human to see it and issue a refund
+    // through Yoco directly, since this codebase has no refund API call).
+    console.error(
+      `[appointmentService] Deposit paid but slot ${appointment._id} was taken by someone else before confirmation - needs a manual refund.`
+    );
+    Sentry.captureMessage('Paid deposit could not be honored - slot taken before confirmation, manual refund needed', {
+      level: 'error',
+      extra: { appointmentId: String(appointment._id), tenantId: String(appointment.tenantId) },
+    });
+
+    appointment.status = 'cancelled';
+    appointment.cancelledAt = new Date();
+    appointment.cancelledReason = 'This slot was taken by someone else before your deposit was confirmed.';
+    await appointment.save();
+
+    await logAudit({
+      actorType: 'superadmin', // no logged-in user/customer - the Yoco webhook triggered this, same convention as billingService.js's ITN handling
+      action: 'appointment.deposit_conflict_cancelled',
+      entityType: 'Appointment',
+      entityId: appointment._id,
+      diff: { after: { status: 'cancelled', reason: appointment.cancelledReason } },
+    });
+
+    await sendDepositConflictNotice({ tenant, customer: appointment.customerId }).catch((notifyErr) => {
+      console.error(`[appointmentService] deposit conflict notice failed: ${notifyErr.message}`);
+    });
+
+    return { appointment, confirmed: false };
+  }
+
   const manageUrl = buildManageUrl({ tenant, appointment });
   await sendBookingConfirmation({
     tenant,
@@ -356,14 +419,16 @@ export async function confirmPendingPaymentAppointment(appointmentId) {
     console.error(`[appointmentService] booking confirmation failed: ${err.message}`);
   });
 
-  return appointment;
+  return { appointment, confirmed: true };
 }
 
 /**
  * The other side of a 'pending_payment' appointment: the deposit failed, was
  * cancelled by the customer, or the checkout simply expired unattended -
- * either way the held slot must be released. Idempotent, same reasoning as
- * confirmPendingPaymentAppointment above.
+ * either way it needs to be cancelled so it stops showing up as a live
+ * appointment (it was never blocking anyone else's slot - see
+ * SLOT_BLOCKING_STATUSES above - but it's still a real record that needs
+ * cleaning up). Idempotent, same reasoning as confirmPendingPaymentAppointment above.
  */
 export async function releasePendingPaymentAppointment(appointmentId) {
   await Appointment.updateOne(

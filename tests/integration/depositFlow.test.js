@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { jest } from '@jest/globals';
 import request from 'supertest';
+import { DateTime } from 'luxon';
 import { connectTestDB, disconnectTestDB, clearDatabase, buildTestApp } from '../helpers/testApp.js';
 import { createTenantWithOwner, seedTenantData } from '../helpers/factories.js';
 import { runWithTenant } from '../../src/lib/tenantContext.js';
 import { Appointment } from '../../src/models/Appointment.js';
 import { Payment } from '../../src/models/Payment.js';
+import { StaffMember } from '../../src/models/StaffMember.js';
 import { releaseStalePendingPayments } from '../../src/services/depositService.js';
 
 let app;
@@ -106,16 +108,28 @@ describe('deposit checkout flow', () => {
       expect(res.status).toBe(400);
     });
 
-    it('holds the slot, creates a pending Payment, and returns the Yoco checkout URL', async () => {
+    it('does not hold the slot, creates a pending Payment, and returns the Yoco checkout URL', async () => {
       await connectYoco(accessToken);
       await requireDeposit(accessToken, 100);
+
+      // seedTenantData's staff has no working hours configured (every day
+      // defaults to []), so GET /public/availability would report zero
+      // slots regardless of booking status - give it real hours and a
+      // grid-aligned startTime within them, so the availability check below
+      // actually exercises whether this specific slot is excluded, the same
+      // setup tests/integration/availability.test.js uses.
+      const future = DateTime.now().setZone(tenant.timezone).plus({ days: 14 }).startOf('day');
+      const weekdayKey = future.toFormat('ccc').toLowerCase();
+      await runWithTenant(tenant._id, async () => {
+        await StaffMember.findByIdAndUpdate(seed.staff._id, { workingHours: { [weekdayKey]: [{ start: '09:00', end: '11:00' }] } });
+      });
+      const startTime = future.set({ hour: 9 }).toISO();
 
       fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
         ok: true,
         json: async () => ({ id: 'ch_test123', redirectUrl: 'https://pay.yoco.com/ch_test123', status: 'created' }),
       });
 
-      const startTime = futureStart();
       const res = await request(app)
         .post(`/api/t/${slug}/public/appointments/checkout`)
         .send({
@@ -144,11 +158,46 @@ describe('deposit checkout flow', () => {
       expect(payment.providerTransactionId).toBe('ch_test123');
       expect(payment.amount).toBe(100);
 
-      // The held slot should no longer show up as available.
+      // A deposit checkout in flight must never block the slot for anyone
+      // else - it should still show up as available while this payment is
+      // pending, so another customer can book (and pay for) it too.
       const availRes = await request(app)
         .get(`/api/t/${slug}/public/availability`)
         .query({ date: startTime.slice(0, 10), serviceIds: String(seed.service._id), staffMemberId: String(seed.staff._id) });
-      expect(availRes.body.staff[0].slots.some((s) => s === startTime || new Date(s).getTime() === new Date(startTime).getTime())).toBe(false);
+      expect(availRes.body.staff[0].slots.some((s) => s === startTime || new Date(s).getTime() === new Date(startTime).getTime())).toBe(true);
+    });
+
+    it('lets a second customer book (and pay) the exact same slot while the first deposit is still pending', async () => {
+      await connectYoco(accessToken);
+      await requireDeposit(accessToken, 100);
+
+      fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: 'ch_test123', redirectUrl: 'https://pay.yoco.com/ch_test123', status: 'created' }),
+      });
+
+      const startTime = futureStart();
+      const bookingPayload = {
+        staffMemberId: String(seed.staff._id),
+        serviceIds: [String(seed.service._id)],
+        startTime,
+      };
+
+      const first = await request(app)
+        .post(`/api/t/${slug}/public/appointments/checkout`)
+        .send({ ...bookingPayload, customerDetails: { phone: '+27821112222', name: 'First Client' } });
+      expect(first.status).toBe(201);
+
+      const second = await request(app)
+        .post(`/api/t/${slug}/public/appointments/checkout`)
+        .send({ ...bookingPayload, customerDetails: { phone: '+27821113333', name: 'Second Client' } });
+      expect(second.status).toBe(201);
+
+      const appointments = await runWithTenant(tenant._id, async () =>
+        Appointment.find({ staffMemberId: seed.staff._id, startTime: new Date(startTime) })
+      );
+      expect(appointments).toHaveLength(2);
+      expect(appointments.every((a) => a.status === 'pending_payment')).toBe(true);
     });
 
     it('releases the held slot if Yoco checkout creation fails', async () => {
@@ -278,6 +327,63 @@ describe('deposit checkout flow', () => {
 
       const appointment = await runWithTenant(tenant._id, async () => Appointment.findById(appointmentId));
       expect(appointment.status).toBe('booked');
+    });
+
+    it('cancels (never double-books) when the slot was taken by someone else before the deposit confirmed', async () => {
+      await connectYoco(accessToken);
+      await requireDeposit(accessToken, 100);
+      const appointmentId = await createPendingCheckout();
+
+      // Someone else won the same slot in the meantime - since pending_payment
+      // never held it, this is a legitimate booking, not a bug.
+      const pending = await runWithTenant(tenant._id, async () => Appointment.findById(appointmentId));
+      await runWithTenant(tenant._id, async () => {
+        const { Customer } = await import('../../src/models/Customer.js');
+        const otherCustomer = await Customer.create({ name: 'Other Client', phone: '+27821119999' });
+        await Appointment.create({
+          customerId: otherCustomer._id,
+          staffMemberId: pending.staffMemberId,
+          serviceIds: pending.serviceIds,
+          startTime: pending.startTime,
+          endTime: pending.endTime,
+          priceSnapshot: pending.priceSnapshot,
+          status: 'booked',
+        });
+      });
+
+      const rawBody = JSON.stringify({
+        type: 'payment.succeeded',
+        payload: { metadata: { checkoutId: 'ch_webhook_test' } },
+      });
+      const webhookId = 'msg_conflict';
+      const webhookTimestamp = String(Math.floor(Date.now() / 1000));
+
+      const res = await request(app)
+        .post(`/api/t/${slug}/public/deposit-webhook`)
+        .set('webhook-id', webhookId)
+        .set('webhook-timestamp', webhookTimestamp)
+        .set('webhook-signature', signWebhook({ webhookId, webhookTimestamp, rawBody }))
+        .set('Content-Type', 'application/json')
+        .send(rawBody);
+      expect(res.status).toBe(200);
+
+      const appointments = await runWithTenant(tenant._id, async () =>
+        Appointment.find({ staffMemberId: pending.staffMemberId, startTime: pending.startTime })
+      );
+      expect(appointments).toHaveLength(2);
+      // The deposit payer's appointment was cancelled, not confirmed - only
+      // the other customer's booking is actually honored for this slot.
+      const depositAppointment = appointments.find((a) => String(a._id) === String(appointmentId));
+      expect(depositAppointment.status).toBe('cancelled');
+      expect(depositAppointment.cancelledReason).toMatch(/taken by someone else/i);
+      const otherAppointment = appointments.find((a) => String(a._id) !== String(appointmentId));
+      expect(otherAppointment.status).toBe('booked');
+
+      // The charge itself still succeeded - the business owes a manual
+      // refund (see appointmentService.js, no refund API exists yet), but
+      // the Payment record must keep reflecting what Yoco actually reported.
+      const payment = await runWithTenant(tenant._id, async () => Payment.findOne({ appointmentId }));
+      expect(payment.status).toBe('succeeded');
     });
   });
 

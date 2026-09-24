@@ -57,12 +57,14 @@ appointmentSchema.plugin(tenantScopePlugin);
 // pre-check, but only one can win this constraint; the loser gets a Mongo
 // duplicate-key error, which createAppointment/rescheduleAppointment catch
 // and turn into the same friendly SLOT_CONFLICT response the pre-check
-// itself returns. Scoped to OPEN_STATUSES (mirrored here, not imported, to
-// avoid a model->service dependency) - a cancelled/completed/no_show
-// appointment must never block a new booking at the same time.
+// itself returns. Scoped to SLOT_BLOCKING_STATUSES (mirrored here, not
+// imported, to avoid a model->service dependency) - deliberately excludes
+// 'pending_payment' (a deposit checkout in flight must never block the slot
+// for anyone else - see appointmentService.js's own comment on this) as well
+// as cancelled/completed/no_show.
 appointmentSchema.index(
   { tenantId: 1, staffMemberId: 1, startTime: 1 },
-  { unique: true, partialFilterExpression: { status: { $in: ['pending_payment', 'booked', 'confirmed'] } } }
+  { unique: true, partialFilterExpression: { status: { $in: ['booked', 'confirmed'] } } }
 );
 appointmentSchema.index({ tenantId: 1, customerId: 1, startTime: -1 });
 appointmentSchema.index({ tenantId: 1, status: 1, startTime: 1 });
