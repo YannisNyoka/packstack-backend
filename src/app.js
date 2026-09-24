@@ -1,6 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { env } from './config/env.js';
@@ -19,6 +20,7 @@ export function createApp() {
   app.set('trust proxy', 1); // Render sits behind a proxy - needed for req.ip / rate limiting to see the real client IP
 
   app.use(helmet());
+  app.use(compression());
   app.use(cors(corsOptions));
   app.use(
     express.json({
